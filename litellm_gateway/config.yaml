@@ -1,0 +1,34 @@
+# LiteLLM Proxy configuration
+# - Routes BOTH chat-completions and embeddings to the same upstream OpenAI-compatible API base.
+# - Exposes friendly local model names (model_name) that you can use from clients.
+#
+# Upstream
+#   BASE_URL: https://mkp-api.fptcloud.com
+# Auth
+#   Export FPT_API_KEY in your shell (see .env.example)
+
+model_list:
+  # Chat / LLM
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-oss-20b
+      api_base: https://mkp-api.fptcloud.com
+      api_key: os.environ/FPT_API_KEY
+
+  # Embeddings
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/multilingual-e5-large
+      api_base: https://mkp-api.fptcloud.com
+      api_key: os.environ/FPT_API_KEY
+
+  # Embeddings (alias matching upstream name)
+  - model_name: multilingual-e5-large
+    litellm_params:
+      model: openai/multilingual-e5-large
+      api_base: https://mkp-api.fptcloud.com
+      api_key: os.environ/FPT_API_KEY
+
+# Optional: if you want to require an auth key for local clients, uncomment this.
+# general_settings:
+#   master_key: os.environ/LITELLM_MASTER_KEY
