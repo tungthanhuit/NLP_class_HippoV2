@@ -9,6 +9,4 @@ tenacity==8.5.0
 tiktoken==0.7.0
 nest_asyncio
 numpy
-scipy
 tqdm
-einops

@@ -79,7 +79,7 @@ docs = [
 
 save_dir = 'outputs'# Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
 llm_model_name = 'gpt-4o-mini' # Any OpenAI model name
-embedding_model_name = 'text-embedding-3-small'# Embedding model name (OpenAI embeddings or local models like Contriever)
+embedding_model_name = 'text-embedding-3-small'# Embedding model name (OpenAI embeddings or local Sentence-Transformers)
 
 #Startup a HippoRAG instance
 hipporag = HippoRAG(save_dir=save_dir, 
@@ -123,6 +123,23 @@ rag_results = hipporag.rag_qa(queries=queries,
                               gold_answers=answers)
 ```
 
+#### Example (Local Sentence-Transformers Embeddings)
+
+To use a local embedding model via Sentence-Transformers, set `embedding_model_name` to `Transformers/<hf-id>`.
+For example, you can use BGE-M3 as:
+
+```python
+from hipporag import HippoRAG
+
+hipporag = HippoRAG(
+  save_dir='outputs',
+  llm_model_name='gpt-4o-mini',
+  embedding_model_name='Transformers/BAAI/bge-m3',
+  # Some HF models require this to load correctly:
+  embedding_trust_remote_code=True,
+)
+```
+
 #### Example (OpenAI Compatible Embeddings)
 
 If you want to use LLMs and Embeddings Compatible to OpenAI, please use the following methods.</p>
@@ -146,7 +163,7 @@ This example illustrates how to use `hipporag` with any locally deployed **OpenA
 ```python
 save_dir = 'outputs'# Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
 llm_model_name = # Any OpenAI model name
-embedding_model_name = # Embedding model name (NV-Embed or Contriever)
+embedding_model_name = # Embedding model name (OpenAI embeddings or local Sentence-Transformers)
 llm_base_url= # Base url for your deployed LLM (i.e. http://localhost:8000/v1)
 
 hipporag = HippoRAG(save_dir=save_dir,
@@ -224,7 +241,7 @@ Start any OpenAI-compatible server and point `--llm_base_url` to it:
 
 ```sh
 dataset=sample
-python main.py --dataset $dataset --llm_base_url http://localhost:8000/v1 --llm_name meta-llama/Llama-3.3-70B-Instruct --embedding_name facebook/contriever
+python main.py --dataset $dataset --llm_base_url http://localhost:8000/v1 --llm_name meta-llama/Llama-3.3-70B-Instruct --embedding_name Transformers/sentence-transformers/all-MiniLM-L6-v2
 ```
 
 #### Advanced: Offline OpenIE (Transformers)
@@ -244,7 +261,7 @@ python main.py --dataset $dataset --openie_mode offline --llm_name Transformers/
 
 ```sh
 rm reproduce/dataset/openie_results/openie_sample_results_ner_meta-llama_Llama-3.3-70B-Instruct_3.json
-rm -rf outputs/sample/sample_meta-llama_Llama-3.3-70B-Instruct_facebook_contriever
+rm -rf outputs/sample/sample_meta-llama_Llama-3.3-70B-Instruct_Transformers_sentence-transformers_all-MiniLM-L6-v2
 ```
 ### Custom Datasets
 

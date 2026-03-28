@@ -24,7 +24,9 @@ class TransformersEmbeddingModel(BaseEmbeddingModel):
         self.batch_size = 64
 
         self.model = SentenceTransformer(
-            self.model_id, device="cuda" if torch.cuda.is_available() else "cpu"
+            self.model_id,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            trust_remote_code=self.global_config.embedding_trust_remote_code,
         )
 
         self.search_query_instr = set(

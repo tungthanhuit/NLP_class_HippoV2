@@ -114,10 +114,10 @@ class BaseConfig:
             "help": "Class name indicating which information extraction model to use."
         },
     )
-    openie_mode: Literal["offline", "online"] = field(
+    openie_mode: Literal["online"] = field(
         default="online",
         metadata={
-            "help": "Mode of the OpenIE model to use. 'offline' runs local Transformers-based OpenIE; 'online' uses the configured LLM API."
+            "help": "Mode of the OpenIE model to use. Only 'online' is supported; it uses the configured LLM API."
         },
     )
     skip_graph: bool = field(
@@ -128,7 +128,13 @@ class BaseConfig:
     embedding_model_name: str = field(
         default="text-embedding-3-small",
         metadata={
-            "help": "Embedding model to use. Supported patterns: OpenAI embeddings like 'text-embedding-3-small' (API, via embedding_base_url), local Contriever models (e.g. 'facebook/contriever'), or local Sentence-Transformers models via 'Transformers/<hf-id>'."
+            "help": "Embedding model to use. Supported patterns: OpenAI embeddings like 'text-embedding-3-small' (API, via embedding_base_url), or local Sentence-Transformers models via 'Transformers/<hf-id>' (e.g., 'Transformers/BAAI/bge-m3')."
+        },
+    )
+    embedding_trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow Hugging Face remote code when loading local Sentence-Transformers models (Transformers/<hf-id>). Enable only if required by the model (e.g., Transformers/BAAI/bge-m3)."
         },
     )
     embedding_batch_size: int = field(

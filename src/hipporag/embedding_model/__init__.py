@@ -1,4 +1,3 @@
-from .Contriever import ContrieverModel
 from .base import EmbeddingConfig, BaseEmbeddingModel
 from .OpenAI import OpenAIEmbeddingModel
 from .Transformers import TransformersEmbeddingModel
@@ -11,7 +10,6 @@ logger = get_logger(__name__)
 __all__ = [
     "BaseEmbeddingModel",
     "EmbeddingConfig",
-    "ContrieverModel",
     "OpenAIEmbeddingModel",
     "TransformersEmbeddingModel",
     "_get_embedding_model_class",
@@ -19,9 +17,7 @@ __all__ = [
 
 
 def _get_embedding_model_class(embedding_model_name: str = "text-embedding-3-small"):
-    if "contriever" in embedding_model_name:
-        return ContrieverModel
-    elif "text-embedding" in embedding_model_name:
+    if "text-embedding" in embedding_model_name:
         return OpenAIEmbeddingModel
     elif embedding_model_name.startswith("Transformers/"):
         return TransformersEmbeddingModel

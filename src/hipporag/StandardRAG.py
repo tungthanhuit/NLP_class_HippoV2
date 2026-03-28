@@ -66,19 +66,18 @@ class StandardRAG:
 
         self.llm_model: BaseLLM = _get_llm_class(self.global_config)
 
-        if self.global_config.openie_mode == "offline":
-            self.embedding_model = None
-        else:
-            self.embedding_model: BaseEmbeddingModel = _get_embedding_model_class(
-                embedding_model_name=self.global_config.embedding_model_name
-            )(
-                global_config=self.global_config,
-                embedding_model_name=self.global_config.embedding_model_name,
+        if self.global_config.openie_mode != "online":
+            raise ValueError(
+                "Only openie_mode='online' is supported in this build. "
+                "Configure an OpenAI-compatible LLM API via llm_base_url/llm_name."
             )
 
-        import ipdb
-
-        ipdb.set_trace()
+        self.embedding_model: BaseEmbeddingModel = _get_embedding_model_class(
+            embedding_model_name=self.global_config.embedding_model_name
+        )(
+            global_config=self.global_config,
+            embedding_model_name=self.global_config.embedding_model_name,
+        )
 
         self.chunk_embedding_store = EmbeddingStore(
             self.embedding_model,

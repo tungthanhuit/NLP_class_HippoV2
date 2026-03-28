@@ -14,9 +14,6 @@ from .llm import _get_llm_class, BaseLLM
 from .embedding_model import _get_embedding_model_class, BaseEmbeddingModel
 from .embedding_store import EmbeddingStore
 from .information_extraction import OpenIE
-from .information_extraction.openie_transformers_offline import (
-    TransformersOfflineOpenIE,
-)
 from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
 from .prompts.linking import get_query_instruction
@@ -40,6 +37,7 @@ class HippoRAG:
         llm_base_url=None,
         embedding_model_name=None,
         embedding_base_url=None,
+        embedding_trust_remote_code=None,
     ):
         """
         Initializes an instance of the class and its related components.
@@ -97,6 +95,9 @@ class HippoRAG:
         if embedding_base_url is not None:
             self.global_config.embedding_base_url = embedding_base_url
 
+        if embedding_trust_remote_code is not None:
+            self.global_config.embedding_trust_remote_code = embedding_trust_remote_code
+
         _print_config = ",\n  ".join(
             [f"{k} = {v}" for k, v in asdict(self.global_config).items()]
         )
@@ -116,27 +117,21 @@ class HippoRAG:
 
         self.llm_model: BaseLLM = _get_llm_class(self.global_config)
 
-        if self.global_config.openie_mode == "online":
-            self.openie = OpenIE(llm_model=self.llm_model)
-        elif self.global_config.openie_mode == "offline":
-            self.openie = TransformersOfflineOpenIE(self.global_config)
-        elif self.global_config.openie_mode == "Transformers-offline":
-            # Backward-compatible alias: previously used as a separate mode.
-            self.openie = TransformersOfflineOpenIE(self.global_config)
-        else:
-            raise ValueError(f"Unknown openie_mode: {self.global_config.openie_mode!r}")
+        if self.global_config.openie_mode != "online":
+            raise ValueError(
+                "Only openie_mode='online' is supported in this build. "
+                "Configure an OpenAI-compatible LLM API via llm_base_url/llm_name."
+            )
+        self.openie = OpenIE(llm_model=self.llm_model)
 
         self.graph = self.initialize_graph()
 
-        if self.global_config.openie_mode == "offline":
-            self.embedding_model = None
-        else:
-            self.embedding_model: BaseEmbeddingModel = _get_embedding_model_class(
-                embedding_model_name=self.global_config.embedding_model_name
-            )(
-                global_config=self.global_config,
-                embedding_model_name=self.global_config.embedding_model_name,
-            )
+        self.embedding_model: BaseEmbeddingModel = _get_embedding_model_class(
+            embedding_model_name=self.global_config.embedding_model_name
+        )(
+            global_config=self.global_config,
+            embedding_model_name=self.global_config.embedding_model_name,
+        )
         self.chunk_embedding_store = EmbeddingStore(
             self.embedding_model,
             os.path.join(self.working_dir, "chunk_embeddings"),
@@ -206,35 +201,6 @@ class HippoRAG:
             )
             return preloaded_graph
 
-    def pre_openie(self, docs: List[str]):
-        logger.info(f"Indexing Documents")
-        logger.info(f"Performing OpenIE Offline")
-
-        chunks = self.chunk_embedding_store.get_missing_string_hash_ids(docs)
-
-        all_openie_info, chunk_keys_to_process = self.load_existing_openie(
-            chunks.keys()
-        )
-        new_openie_rows = {k: chunks[k] for k in chunk_keys_to_process}
-
-        if len(chunk_keys_to_process) > 0:
-            new_ner_results_dict, new_triple_results_dict = self.openie.batch_openie(
-                new_openie_rows
-            )
-            self.merge_openie_results(
-                all_openie_info,
-                new_openie_rows,
-                new_ner_results_dict,
-                new_triple_results_dict,
-            )
-
-        if self.global_config.save_openie:
-            self.save_openie_results(all_openie_info)
-
-        assert False, logger.info(
-            "Done with OpenIE, run online indexing for future retrieval."
-        )
-
     def index(self, docs: List[str]):
         """
         Indexes the given documents based on the HippoRAG 2 framework which generates an OpenIE knowledge graph
@@ -248,9 +214,6 @@ class HippoRAG:
         logger.info(f"Indexing Documents")
 
         logger.info(f"Performing OpenIE")
-
-        if self.global_config.openie_mode == "offline":
-            self.pre_openie(docs)
 
         self.chunk_embedding_store.insert_strings(docs)
         chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
