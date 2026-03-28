@@ -12,24 +12,30 @@ from .base import BaseEmbeddingModel, EmbeddingConfig
 
 logger = get_logger(__name__)
 
+
 class OpenAIEmbeddingModel(BaseEmbeddingModel):
 
-    def __init__(self, global_config: Optional[BaseConfig] = None, embedding_model_name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        global_config: Optional[BaseConfig] = None,
+        embedding_model_name: Optional[str] = None,
+    ) -> None:
         super().__init__(global_config=global_config)
 
         if embedding_model_name is not None:
             self.embedding_model_name = embedding_model_name
             logger.debug(
-                f"Overriding {self.__class__.__name__}'s embedding_model_name with: {self.embedding_model_name}")
+                f"Overriding {self.__class__.__name__}'s embedding_model_name with: {self.embedding_model_name}"
+            )
 
         self._init_embedding_config()
 
         # Initializing the embedding model
         logger.debug(
-            f"Initializing {self.__class__.__name__}'s embedding model with params: {self.embedding_config.model_init_params}")
+            f"Initializing {self.__class__.__name__}'s embedding model with params: {self.embedding_config.model_init_params}"
+        )
 
         self.client = OpenAI(base_url=self.global_config.embedding_base_url)
-
 
     def _init_embedding_config(self) -> None:
         """
@@ -48,24 +54,28 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
                 "pretrained_model_name_or_path": self.embedding_model_name,
                 "trust_remote_code": True,
                 # "torch_dtype": "auto",
-                'device_map': "auto",  # added this line to use multiple GPUs
+                "device_map": "auto",  # added this line to use multiple GPUs
                 # **kwargs
             },
             "encode_params": {
                 "max_length": self.global_config.embedding_max_seq_len,  # 32768 from official example,
                 "instruction": "",
                 "batch_size": self.global_config.embedding_batch_size,
-                "num_workers": 32
+                "num_workers": 32,
             },
         }
 
         self.embedding_config = EmbeddingConfig.from_dict(config_dict=config_dict)
-        logger.debug(f"Init {self.__class__.__name__}'s embedding_config: {self.embedding_config}")
+        logger.debug(
+            f"Init {self.__class__.__name__}'s embedding_config: {self.embedding_config}"
+        )
 
     def encode(self, texts: List[str]):
         texts = [t.replace("\n", " ") for t in texts]
-        texts = [t if t != '' else ' ' for t in texts]
-        response = self.client.embeddings.create(input=texts, model=self.embedding_model_name)
+        texts = [t if t != "" else " " for t in texts]
+        response = self.client.embeddings.create(
+            input=texts, model=self.embedding_model_name
+        )
         results = np.array([v.embedding for v in response.data])
 
         return results
@@ -79,7 +89,7 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
             params.update(kwargs)
 
         if "instruction" in kwargs:
-            if kwargs["instruction"] != '':
+            if kwargs["instruction"] != "":
                 params["instruction"] = f"Instruct: {kwargs['instruction']}\nQuery: "
             # del params["instruction"]
 
@@ -93,7 +103,7 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
             pbar = tqdm(total=len(texts), desc="Batch Encoding")
             results = []
             for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
+                batch = texts[i : i + batch_size]
                 try:
                     results.append(self.encode(batch))
                 except Exception:

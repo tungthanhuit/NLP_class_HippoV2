@@ -1,6 +1,7 @@
 import re
 import string
 
+
 def normalize_answer(answer: str) -> str:
     """
     Normalize a given string by applying the following transformations:
@@ -15,6 +16,7 @@ def normalize_answer(answer: str) -> str:
     Returns:
         str: The normalized string.
     """
+
     def remove_articles(text):
         return re.sub(r"\b(a|an|the)\b", " ", text)
 
@@ -27,5 +29,5 @@ def normalize_answer(answer: str) -> str:
 
     def lower(text):
         return text.lower()
-    
+
     return white_space_fix(remove_articles(remove_punc(lower(answer))))

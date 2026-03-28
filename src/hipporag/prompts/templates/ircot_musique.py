@@ -7,24 +7,23 @@ one_shot_ircot_demo_docs = (
 )
 
 
-
 one_shot_ircot_demo = (
-    f'{one_shot_ircot_demo_docs}'
-    '\n\nQuestion: '
+    f"{one_shot_ircot_demo_docs}"
+    "\n\nQuestion: "
     f"When was Neville A. Stanton's employer founded?"
-    '\nThought: '
+    "\nThought: "
     f"The employer of Neville A. Stanton is University of Southampton. The University of Southampton was founded in 1862. So the answer is: 1862."
-    '\n\n'
+    "\n\n"
 )
 
 ircot_system = (
     'You serve as an intelligent assistant, adept at facilitating users through complex, multi-hop reasoning across multiple documents. This task is illustrated through demonstrations, each consisting of a document set paired with a relevant question and its multi-hop reasoning thoughts. Your task is to generate one thought for current step, DON\'T generate the whole thoughts at once! If you reach what you believe to be the final step, start with "So the answer is:".'
-    '\n\n'
-    f'{one_shot_ircot_demo}'
+    "\n\n"
+    f"{one_shot_ircot_demo}"
 )
 
 
 prompt_template = [
     {"role": "system", "content": ircot_system},
-    {"role": "user", "content": "${prompt_user}"}
+    {"role": "user", "content": "${prompt_user}"},
 ]

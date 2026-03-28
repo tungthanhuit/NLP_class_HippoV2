@@ -25,7 +25,7 @@ setuptools.setup(
         "tiktoken==0.7.0",
         "pydantic==2.10.4",
         "tenacity==8.5.0",
-        "einops", # No version specified
-        "tqdm", # No version specified
-    ]
+        "einops",  # No version specified
+        "tqdm",  # No version specified
+    ],
 )

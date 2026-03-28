@@ -1,14 +1,14 @@
 import numpy as np
-from tqdm import tqdm
 import os
-from typing import Union, Optional, List, Dict, Set, Any, Tuple, Literal
+from typing import List
 import logging
 from copy import deepcopy
 import pandas as pd
 
-from .utils.misc_utils import compute_mdhash_id, NerRawOutput, TripleRawOutput
+from .utils.misc_utils import compute_mdhash_id
 
 logger = logging.getLogger(__name__)
+
 
 class EmbeddingStore:
     def __init__(self, embedding_model, db_filename, batch_size, namespace):
@@ -36,21 +36,21 @@ class EmbeddingStore:
             logger.info(f"Creating working directory: {db_filename}")
             os.makedirs(db_filename, exist_ok=True)
 
-        self.filename = os.path.join(
-            db_filename, f"vdb_{self.namespace}.parquet"
-        )
+        self.filename = os.path.join(db_filename, f"vdb_{self.namespace}.parquet")
         self._load_data()
 
     def get_missing_string_hash_ids(self, texts: List[str]):
         nodes_dict = {}
 
         for text in texts:
-            nodes_dict[compute_mdhash_id(text, prefix=self.namespace + "-")] = {'content': text}
+            nodes_dict[compute_mdhash_id(text, prefix=self.namespace + "-")] = {
+                "content": text
+            }
 
         # Get all hash_ids from the input dictionary.
         all_hash_ids = list(nodes_dict.keys())
         if not all_hash_ids:
-            return  {}
+            return {}
 
         existing = self.hash_id_to_row.keys()
 
@@ -58,13 +58,18 @@ class EmbeddingStore:
         missing_ids = [hash_id for hash_id in all_hash_ids if hash_id not in existing]
         texts_to_encode = [nodes_dict[hash_id]["content"] for hash_id in missing_ids]
 
-        return {h: {"hash_id": h, "content": t} for h, t in zip(missing_ids, texts_to_encode)}
+        return {
+            h: {"hash_id": h, "content": t}
+            for h, t in zip(missing_ids, texts_to_encode)
+        }
 
     def insert_strings(self, texts: List[str]):
         nodes_dict = {}
 
         for text in texts:
-            nodes_dict[compute_mdhash_id(text, prefix=self.namespace + "-")] = {'content': text}
+            nodes_dict[compute_mdhash_id(text, prefix=self.namespace + "-")] = {
+                "content": text
+            }
 
         # Get all hash_ids from the input dictionary.
         all_hash_ids = list(nodes_dict.keys())
@@ -77,10 +82,11 @@ class EmbeddingStore:
         missing_ids = [hash_id for hash_id in all_hash_ids if hash_id not in existing]
 
         logger.info(
-            f"Inserting {len(missing_ids)} new records, {len(all_hash_ids) - len(missing_ids)} records already exist.")
+            f"Inserting {len(missing_ids)} new records, {len(all_hash_ids) - len(missing_ids)} records already exist."
+        )
 
         if not missing_ids:
-            return  {}# All records already exist.
+            return {}  # All records already exist.
 
         # Prepare the texts to encode from the "content" field.
         texts_to_encode = [nodes_dict[hash_id]["content"] for hash_id in missing_ids]
@@ -92,14 +98,22 @@ class EmbeddingStore:
     def _load_data(self):
         if os.path.exists(self.filename):
             df = pd.read_parquet(self.filename)
-            self.hash_ids, self.texts, self.embeddings = df["hash_id"].values.tolist(), df["content"].values.tolist(), df["embedding"].values.tolist()
+            self.hash_ids, self.texts, self.embeddings = (
+                df["hash_id"].values.tolist(),
+                df["content"].values.tolist(),
+                df["embedding"].values.tolist(),
+            )
             self.hash_id_to_idx = {h: idx for idx, h in enumerate(self.hash_ids)}
             self.hash_id_to_row = {
                 h: {"hash_id": h, "content": t}
                 for h, t in zip(self.hash_ids, self.texts)
             }
-            self.hash_id_to_text = {h: self.texts[idx] for idx, h in enumerate(self.hash_ids)}
-            self.text_to_hash_id = {self.texts[idx]: h  for idx, h in enumerate(self.hash_ids)}
+            self.hash_id_to_text = {
+                h: self.texts[idx] for idx, h in enumerate(self.hash_ids)
+            }
+            self.text_to_hash_id = {
+                self.texts[idx]: h for idx, h in enumerate(self.hash_ids)
+            }
             assert len(self.hash_ids) == len(self.texts) == len(self.embeddings)
             logger.info(f"Loaded {len(self.hash_ids)} records from {self.filename}")
         else:
@@ -107,16 +121,25 @@ class EmbeddingStore:
             self.hash_id_to_idx, self.hash_id_to_row = {}, {}
 
     def _save_data(self):
-        data_to_save = pd.DataFrame({
-            "hash_id": self.hash_ids,
-            "content": self.texts,
-            "embedding": self.embeddings
-        })
+        data_to_save = pd.DataFrame(
+            {
+                "hash_id": self.hash_ids,
+                "content": self.texts,
+                "embedding": self.embeddings,
+            }
+        )
         data_to_save.to_parquet(self.filename, index=False)
-        self.hash_id_to_row = {h: {"hash_id": h, "content": t} for h, t, e in zip(self.hash_ids, self.texts, self.embeddings)}
+        self.hash_id_to_row = {
+            h: {"hash_id": h, "content": t}
+            for h, t, e in zip(self.hash_ids, self.texts, self.embeddings)
+        }
         self.hash_id_to_idx = {h: idx for idx, h in enumerate(self.hash_ids)}
-        self.hash_id_to_text = {h: self.texts[idx] for idx, h in enumerate(self.hash_ids)}
-        self.text_to_hash_id = {self.texts[idx]: h for idx, h in enumerate(self.hash_ids)}
+        self.hash_id_to_text = {
+            h: self.texts[idx] for idx, h in enumerate(self.hash_ids)
+        }
+        self.text_to_hash_id = {
+            self.texts[idx]: h for idx, h in enumerate(self.hash_ids)
+        }
         logger.info(f"Saved {len(self.hash_ids)} records to {self.filename}")
 
     def _upsert(self, hash_ids, texts, embeddings):
@@ -153,7 +176,7 @@ class EmbeddingStore:
         if not hash_ids:
             return {}
 
-        results = {id : self.hash_id_to_row[id] for id in hash_ids}
+        results = {id: self.hash_id_to_row[id] for id in hash_ids}
 
         return results
 
@@ -164,11 +187,11 @@ class EmbeddingStore:
         return deepcopy(self.hash_id_to_row)
 
     def get_all_texts(self):
-        return set(row['content'] for row in self.hash_id_to_row.values())
+        return set(row["content"] for row in self.hash_id_to_row.values())
 
     def get_embedding(self, hash_id, dtype=np.float32) -> np.ndarray:
         return self.embeddings[self.hash_id_to_idx[hash_id]].astype(dtype)
-    
+
     def get_embeddings(self, hash_ids, dtype=np.float32) -> list[np.ndarray]:
         if not hash_ids:
             return []

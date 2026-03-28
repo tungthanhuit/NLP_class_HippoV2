@@ -2,21 +2,9 @@ import json
 import re
 import pydantic
 from string import Template
-from typing import (
-    Optional,
-    Union,
-    List,
-    TypedDict,
-    Tuple,
-    Dict,
-    Type
-)
+from typing import Optional, Union, List, TypedDict, Tuple, Dict, Type
 
-from openai import (
-    APIConnectionError,
-    RateLimitError,
-    Timeout
-)
+from openai import APIConnectionError, RateLimitError, Timeout
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -29,11 +17,18 @@ from .config_utils import BaseConfig
 
 class TextChatMessage(TypedDict):
     """Representation of a single text-based chat message in the chat history."""
+
     role: str  # Either "system", "user", or "assistant"
-    content: Union[str, Template]  # The text content of the message (could also be a string.Template instance)
+    content: Union[
+        str, Template
+    ]  # The text content of the message (could also be a string.Template instance)
 
 
-def convert_format_to_template(original_string: str, placeholder_mapping: Optional[dict] = None, static_values: Optional[dict] = None) -> str:
+def convert_format_to_template(
+    original_string: str,
+    placeholder_mapping: Optional[dict] = None,
+    static_values: Optional[dict] = None,
+) -> str:
     """
     Converts a .format() style string to a Template-style string.
 
@@ -50,7 +45,7 @@ def convert_format_to_template(original_string: str, placeholder_mapping: Option
     static_values = static_values or {}
 
     # Regular expression to find .format() style placeholders
-    placeholder_pattern = re.compile(r'\{(\w+)\}')
+    placeholder_pattern = re.compile(r"\{(\w+)\}")
 
     # Substitute placeholders in the string
     def replace_placeholder(match):
@@ -61,8 +56,10 @@ def convert_format_to_template(original_string: str, placeholder_mapping: Option
             return str(static_values[original_placeholder])
 
         # Otherwise, rename the placeholder if needed, or keep it as is
-        new_placeholder = placeholder_mapping.get(original_placeholder, original_placeholder)
-        return f'${{{new_placeholder}}}'
+        new_placeholder = placeholder_mapping.get(
+            original_placeholder, original_placeholder
+        )
+        return f"${{{new_placeholder}}}"
 
     # Replace all placeholders
     template_string = placeholder_pattern.sub(replace_placeholder, original_string)
@@ -79,7 +76,7 @@ def safe_unicode_decode(content: Union[bytes, str]) -> str:
 
     Returns:
         str: The decoded Unicode string with escape sequences replaced by their corresponding characters.
-    
+
     Raises:
         AttributeError: If the input is neither bytes nor a string.
     """
@@ -108,7 +105,7 @@ def dynamic_retry(experiment_config: BaseConfig):
     Factory function to create a retry decorator with dynamic parameters.
 
     Args:
-        experiment_config (BaseConfig): Configuration containing stop and wait parameters. Expected to use the global config for running all experiments. 
+        experiment_config (BaseConfig): Configuration containing stop and wait parameters. Expected to use the global config for running all experiments.
 
     Returns:
         Callable: A retry decorator with dynamically set parameters.
@@ -155,7 +152,7 @@ def fix_broken_generated_json(json_str: str) -> str:
     - Ensuring braces and brackets inside string literals are not considered.
 
     If the original json_str string can be successfully loaded by json.loads(), will directly return it without any modification.
-    
+
     Args:
         json_str (str): The malformed JSON string to be fixed.
 
@@ -181,17 +178,20 @@ def fix_broken_generated_json(json_str: str) -> str:
             if inside_string:
                 if escape_next:
                     escape_next = False
-                elif char == '\\':
+                elif char == "\\":
                     escape_next = True
                 elif char == '"':
                     inside_string = False
             else:
                 if char == '"':
                     inside_string = True
-                elif char in '{[':
+                elif char in "{[":
                     unclosed.append(char)
-                elif char in '}]':
-                    if unclosed and ((char == '}' and unclosed[-1] == '{') or (char == ']' and unclosed[-1] == '[')):
+                elif char in "}]":
+                    if unclosed and (
+                        (char == "}" and unclosed[-1] == "{")
+                        or (char == "]" and unclosed[-1] == "[")
+                    ):
                         unclosed.pop()
 
         return unclosed
@@ -204,7 +204,7 @@ def fix_broken_generated_json(json_str: str) -> str:
         pass
 
     # Step 1: Remove trailing content after the last comma.
-    last_comma_index = json_str.rfind(',')
+    last_comma_index = json_str.rfind(",")
     if last_comma_index != -1:
         json_str = json_str[:last_comma_index]
 
@@ -212,7 +212,7 @@ def fix_broken_generated_json(json_str: str) -> str:
     unclosed_elements = find_unclosed(json_str)
 
     # Step 3: Append the necessary closing elements in reverse order of opening.
-    closing_map = {'{': '}', '[': ']'}
+    closing_map = {"{": "}", "[": "]"}
     for open_char in reversed(unclosed_elements):
         json_str += closing_map[open_char]
 
@@ -231,20 +231,21 @@ def filter_invalid_triples(triples: List[List[str]]) -> List[List[str]]:
     - Each valid triple is converted to a list of strings.
     - The order of unique, valid triples is preserved.
     - Do not apply any text preprocessing techniques or rules within this function.
-    
+
     Args:
-        triples (List[List[str]]): 
+        triples (List[List[str]]):
             A list of triples (each a list of strings or elements that can be converted to strings).
 
     Returns:
-        List[List[str]]: 
+        List[List[str]]:
             A list of unique, valid triples, each represented as a list of strings.
     """
     unique_triples = set()
     valid_triples = []
 
     for triple in triples:
-        if len(triple) != 3: continue  # Skip triples that do not have exactly 3 elements
+        if len(triple) != 3:
+            continue  # Skip triples that do not have exactly 3 elements
 
         valid_triple = [str(item) for item in triple]
         if tuple(valid_triple) not in unique_triples:
@@ -260,13 +261,11 @@ PROMPT_JSON_TEMPLATE = {
         "properties": {
             "named_entities": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                },
-                "minItems": 0
+                "items": {"type": "string"},
+                "minItems": 0,
             }
         },
-        "required": ["named_entities"]
+        "required": ["named_entities"],
     },
     "triples": {
         "type": "object",
@@ -275,16 +274,14 @@ PROMPT_JSON_TEMPLATE = {
                 "type": "array",
                 "items": {
                     "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
+                    "items": {"type": "string"},
                     "maxItems": 3,
                     "minItems": 3,
                 },
-                "minItems": 0
+                "minItems": 0,
             }
         },
-        "required": ["triples"]
+        "required": ["triples"],
     },
     "fact": {
         "type": "object",
@@ -293,16 +290,14 @@ PROMPT_JSON_TEMPLATE = {
                 "type": "array",
                 "items": {
                     "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
+                    "items": {"type": "string"},
                     "maxItems": 3,
                     "minItems": 3,
                 },
-                "minItems": 0
+                "minItems": 0,
             }
         },
-        "required": ["fact"]
+        "required": ["fact"],
     },
     "json": {
         "type": "object",
@@ -311,23 +306,16 @@ PROMPT_JSON_TEMPLATE = {
         "type": "object",
         "required": ["Thought", "Answer"],
         "properties": {
-            "Thought": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 2000
-            },
-            "Answer": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200
-            },
+            "Thought": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "Answer": {"type": "string", "minLength": 1, "maxLength": 200},
         },
-    }
+    },
 }
 
 
 def num_tokens_by_tiktoken(text: str):
     import tiktoken
+
     enc = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
     return len(enc.encode(text))
@@ -343,7 +331,9 @@ class NerModel(pydantic.BaseModel):
         "required": ["named_entities"]
     }
     """
+
     named_entities: List[str]
+
 
 class TriplesModel(pydantic.BaseModel):
     """
@@ -355,7 +345,9 @@ class TriplesModel(pydantic.BaseModel):
         "required": ["triples"]
     }
     """
+
     triples: List[Tuple[str, str, str]]
+
 
 class FactModel(pydantic.BaseModel):
     """
@@ -367,7 +359,9 @@ class FactModel(pydantic.BaseModel):
         "required": ["fact"]
     }
     """
+
     fact: List[Tuple[str, str, str]]
+
 
 class ArbitraryJsonModel(pydantic.BaseModel):
     """
@@ -379,7 +373,9 @@ class ArbitraryJsonModel(pydantic.BaseModel):
         "type": "object"
     }
     """
-    model_config = pydantic.ConfigDict(extra='allow')
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
 
 class QaCotModel(pydantic.BaseModel):
     """
@@ -394,18 +390,14 @@ class QaCotModel(pydantic.BaseModel):
         }
     }
     """
+
     Thought: str = pydantic.Field(
-        ...,
-        min_length=1,
-        max_length=2000,
-        description="The model's thinking process"
+        ..., min_length=1, max_length=2000, description="The model's thinking process"
     )
     Answer: str = pydantic.Field(
-        ...,
-        min_length=1,
-        max_length=200,
-        description="The model's final answer"
+        ..., min_length=1, max_length=200, description="The model's final answer"
     )
+
 
 MODEL_TEMPLATES: Dict[str, Type[pydantic.BaseModel]] = {
     "ner": NerModel,
@@ -414,6 +406,7 @@ MODEL_TEMPLATES: Dict[str, Type[pydantic.BaseModel]] = {
     "json": ArbitraryJsonModel,
     "qa_cot": QaCotModel,
 }
+
 
 def get_pydantic_model(template_name: str) -> Type[pydantic.BaseModel]:
     """
@@ -431,6 +424,8 @@ def get_pydantic_model(template_name: str) -> Type[pydantic.BaseModel]:
     model_class = MODEL_TEMPLATES.get(template_name)
     if model_class is None:
         available_keys = ", ".join(MODEL_TEMPLATES.keys())
-        raise ValueError(f"Unknown template name: '{template_name}'. Available templates: {available_keys}")
-    
+        raise ValueError(
+            f"Unknown template name: '{template_name}'. Available templates: {available_keys}"
+        )
+
     return model_class
