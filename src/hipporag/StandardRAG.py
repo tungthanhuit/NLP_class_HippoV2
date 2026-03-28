@@ -21,7 +21,6 @@ from .llm import _get_llm_class, BaseLLM
 from .embedding_model import _get_embedding_model_class, BaseEmbeddingModel
 from .embedding_store import EmbeddingStore
 from .information_extraction import OpenIE
-from .information_extraction.openie_vllm_offline import VLLMOfflineOpenIE
 from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
 from .prompts.linking import get_query_instruction
@@ -41,9 +40,7 @@ class StandardRAG:
                  save_dir=None,
                  llm_model_name=None,
                  embedding_model_name=None,
-                 llm_base_url=None,
-                 azure_endpoint=None,
-                 azure_embedding_endpoint=None):
+                 llm_base_url=None):
         """
         """
         if global_config is None:
@@ -63,12 +60,6 @@ class StandardRAG:
 
         if llm_base_url is not None:
             self.global_config.llm_base_url = llm_base_url
-
-        if azure_endpoint is not None:
-            self.global_config.azure_endpoint = azure_endpoint
-
-        if azure_embedding_endpoint is not None:
-            self.global_config.azure_embedding_endpoint = azure_embedding_endpoint
 
         _print_config = ",\n  ".join([f"{k} = {v}" for k, v in asdict(self.global_config).items()])
         logger.debug(f"HippoRAG init with config:\n  {_print_config}\n")

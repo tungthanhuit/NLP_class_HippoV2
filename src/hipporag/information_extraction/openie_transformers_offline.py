@@ -19,7 +19,7 @@ class TransformersOfflineOpenIE(OpenIE):
 
     def batch_openie(self, chunks: Dict[str, ChunkInfo]) -> Tuple[Dict[str, NerRawOutput], Dict[str, TripleRawOutput]]:
         """
-        Conduct batch OpenIE synchronously using vLLM offline batch mode, including NER and triple extraction
+        Conduct batch OpenIE synchronously using a local Transformers model, including NER and triple extraction.
 
         Args:
             chunks (Dict[str, ChunkInfo]): chunks to be incorporated into graph. Each key is a hashed chunk
@@ -65,7 +65,7 @@ class TransformersOfflineOpenIE(OpenIE):
             response = triple_output_instance
             try:
                 triples = json.loads(response)["triples"]
-            except:
+            except Exception as e:
                 triples = []
                 logger.warning(f"Could not parse response from OpenIE: {e}")
             if len(triples) == 0:

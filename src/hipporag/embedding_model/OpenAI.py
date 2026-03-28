@@ -4,13 +4,11 @@ from typing import List, Optional
 import numpy as np
 import torch
 from tqdm import tqdm
-from transformers import AutoModel
 from openai import OpenAI
-from openai import AzureOpenAI
 
 from ..utils.config_utils import BaseConfig
 from ..utils.logging_utils import get_logger
-from .base import BaseEmbeddingModel, EmbeddingConfig, make_cache_embed
+from .base import BaseEmbeddingModel, EmbeddingConfig
 
 logger = get_logger(__name__)
 
@@ -30,13 +28,7 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
         logger.debug(
             f"Initializing {self.__class__.__name__}'s embedding model with params: {self.embedding_config.model_init_params}")
 
-        if self.global_config.azure_embedding_endpoint is None:
-            self.client = OpenAI(
-                base_url=self.global_config.embedding_base_url
-            )
-        else:
-            self.client = AzureOpenAI(api_version=self.global_config.azure_embedding_endpoint.split('api-version=')[1],
-                                      azure_endpoint=self.global_config.azure_embedding_endpoint)
+        self.client = OpenAI(base_url=self.global_config.embedding_base_url)
 
 
     def _init_embedding_config(self) -> None:
@@ -79,10 +71,12 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
         return results
 
     def batch_encode(self, texts: List[str], **kwargs) -> None:
-        if isinstance(texts, str): texts = [texts]
+        if isinstance(texts, str):
+            texts = [texts]
 
         params = deepcopy(self.embedding_config.encode_params)
-        if kwargs: params.update(kwargs)
+        if kwargs:
+            params.update(kwargs)
 
         if "instruction" in kwargs:
             if kwargs["instruction"] != '':
@@ -102,8 +96,9 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
                 batch = texts[i:i + batch_size]
                 try:
                     results.append(self.encode(batch))
-                except:
-                    import ipdb; ipdb.set_trace()
+                except Exception:
+                    logger.exception("Embedding batch failed")
+                    raise
                 pbar.update(batch_size)
             pbar.close()
             results = np.concatenate(results)

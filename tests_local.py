@@ -23,7 +23,7 @@ def main():
 
     save_dir = 'outputs/local_test'  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
     llm_model_name = 'meta-llama/Llama-3.1-8B-Instruct'  # Any OpenAI model name
-    embedding_model_name = 'nvidia/NV-Embed-v2'  # Embedding model name (NV-Embed, GritLM or Contriever for now)
+    embedding_model_name = 'nvidia/NV-Embed-v2'  # Embedding model name
 
     # Startup a HippoRAG instance
     hipporag = HippoRAG(save_dir=save_dir,
@@ -66,8 +66,6 @@ def main():
     hipporag = HippoRAG(save_dir=save_dir,
                         llm_model_name=llm_model_name,
                         embedding_model_name=embedding_model_name,
-                        azure_endpoint="https://bernal-hipporag.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview",
-                        azure_embedding_endpoint="https://bernal-hipporag.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2023-05-15"
                         )
 
     print(hipporag.rag_qa(queries=queries,
@@ -78,8 +76,6 @@ def main():
     hipporag = HippoRAG(save_dir=save_dir,
                         llm_model_name=llm_model_name,
                         embedding_model_name=embedding_model_name,
-                        azure_endpoint="https://bernal-hipporag.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview",
-                        azure_embedding_endpoint="https://bernal-hipporag.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2023-05-15"
                         )
 
     new_docs = [

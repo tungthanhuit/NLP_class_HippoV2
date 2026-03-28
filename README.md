@@ -79,7 +79,7 @@ docs = [
 
 save_dir = 'outputs'# Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
 llm_model_name = 'gpt-4o-mini' # Any OpenAI model name
-embedding_model_name = 'nvidia/NV-Embed-v2'# Embedding model name (NV-Embed, GritLM or Contriever for now)
+embedding_model_name = 'nvidia/NV-Embed-v2'# Embedding model name (NV-Embed or Contriever)
 
 #Startup a HippoRAG instance
 hipporag = HippoRAG(save_dir=save_dir, 
@@ -135,29 +135,18 @@ hipporag = HippoRAG(save_dir=save_dir,
     embedding_base_url='Your Embedding model url')
 ```
 
-### Local Deployment (vLLM)
+### Local Deployment (OpenAI-compatible server)
 
-This simple example will illustrate how to use `hipporag` with any vLLM-compatible locally deployed LLM.
+This example illustrates how to use `hipporag` with any locally deployed **OpenAI-compatible** server (or proxy) for chat and/or embeddings.
 
-1. Run a local [OpenAI-compatible vLLM server](https://docs.vllm.ai/en/latest/getting_started/quickstart.html#quickstart-online) with specified GPUs (make sure you leave enough memory for your embedding model).
+1. Start your server/proxy so it exposes OpenAI-style routes under `/v1` (e.g., `http://localhost:6578/v1` or `http://localhost:4000/v1`).
 
-```sh
-export CUDA_VISIBLE_DEVICES=0,1
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export HF_HOME=<path to Huggingface home directory>
-
-conda activate hipporag  # vllm should be in this environment
-
-# Tune gpu-memory-utilization or max_model_len to fit your GPU memory, if OOM occurs
-vllm serve meta-llama/Llama-3.3-70B-Instruct --tensor-parallel-size 2 --max_model_len 4096 --gpu-memory-utilization 0.95 
-```
-
-2. Now you can use very similar code to the one above to use `hipporag`: 
+2. Point HippoRAG to it via `llm_base_url` (and optionally `embedding_base_url`):
 
 ```python
 save_dir = 'outputs'# Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
 llm_model_name = # Any OpenAI model name
-embedding_model_name = # Embedding model name (NV-Embed, GritLM or Contriever for now)
+embedding_model_name = # Embedding model name (NV-Embed or Contriever)
 llm_base_url= # Base url for your deployed LLM (i.e. http://localhost:8000/v1)
 
 hipporag = HippoRAG(save_dir=save_dir,
@@ -189,18 +178,7 @@ python tests_openai.py
 
 ### Local Test
 
-To test locally, you must deploy a vLLM instance. We choose to deploy a smaller 8B model `Llama-3.1-8B-Instruct` for cheaper testing.
-
-```sh
-export CUDA_VISIBLE_DEVICES=0
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export HF_HOME=<path to Huggingface home directory>
-
-conda activate hipporag  # vllm should be in this environment
-
-# Tune gpu-memory-utilization or max_model_len to fit your GPU memory, if OOM occurs
-vllm serve meta-llama/Llama-3.1-8B-Instruct --tensor-parallel-size 2 --max_model_len 4096 --gpu-memory-utilization 0.95 --port 6578
-```
+To test locally, start any OpenAI-compatible server (or proxy) and set `llm_base_url` in the test script. For example, if your server listens on `http://localhost:6578/v1`, you can run:
 
 Then, we run the following test script:
 
@@ -240,53 +218,28 @@ dataset=sample  # or any other dataset under `reproduce/dataset`
 python main.py --dataset $dataset --llm_base_url https://api.openai.com/v1 --llm_name gpt-4o-mini --embedding_name nvidia/NV-Embed-v2
 ```
 
-### Run with vLLM (Llama)
+### Run with local OpenAI-compatible server
 
-1. As above, run a local [OpenAI-compatible vLLM server](https://docs.vllm.ai/en/latest/getting_started/quickstart.html#quickstart-online) with specified GPU.
-
-```sh
-export CUDA_VISIBLE_DEVICES=0,1
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export HF_HOME=<path to Huggingface home directory>
-
-conda activate hipporag  # vllm should be in this environment
-
-# Tune gpu-memory-utilization or max_model_len to fit your GPU memory, if OOM occurs
-vllm serve meta-llama/Llama-3.3-70B-Instruct --tensor-parallel-size 2 --max_model_len 4096 --gpu-memory-utilization 0.95 
-```
-
-2. Use another GPUs to run the main program in another terminal.
+Start any OpenAI-compatible server and point `--llm_base_url` to it:
 
 ```sh
-export CUDA_VISIBLE_DEVICES=2,3  # set another GPUs while vLLM server is running
-export HF_HOME=<path to Huggingface home directory>
 dataset=sample
-
 python main.py --dataset $dataset --llm_base_url http://localhost:8000/v1 --llm_name meta-llama/Llama-3.3-70B-Instruct --embedding_name nvidia/NV-Embed-v2
 ```
 
-#### Advanced: Run with vLLM offline batch
+#### Advanced: Offline OpenIE (Transformers)
 
-vLLM offers an [offline batch mode](https://docs.vllm.ai/en/latest/getting_started/quickstart.html#offline-batched-inference) for faster inference, which could bring us more than 3x faster indexing compared to vLLM online server. 
-
-1. Use the following command to run the main program with vLLM offline batch mode.
+You can run OpenIE extraction locally using a Transformers model by setting `--openie_mode offline`. This generates and caches OpenIE outputs, then intentionally stops; you should run online indexing later for retrieval/QA.
 
 ```sh
-export CUDA_VISIBLE_DEVICES=0,1,2,3 # use all GPUs for faster offline indexing
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export HF_HOME=<path to Huggingface home directory>
-export OPENAI_API_KEY=''
 dataset=sample
-
-python main.py --dataset $dataset --llm_name meta-llama/Llama-3.3-70B-Instruct --openie_mode offline --skip_graph
+python main.py --dataset $dataset --openie_mode offline --llm_name Transformers/meta-llama/Llama-3.1-8B-Instruct --skip_graph
 ```
-
-2. After the first step, OpenIE result is saved to file. Go back to run vLLM online server and main program as described in the `Run with vLLM (Llama)` main section.
 
 ## Debugging Note
 
 - `/reproduce/dataset/sample.json` is a small dataset specifically for debugging.
-- When debugging vLLM offline mode, set `tensor_parallel_size` as `1` in `hipporag/llm/vllm_offline.py`.
+- When debugging offline OpenIE, start with a smaller local model (e.g., `Transformers/meta-llama/Llama-3.1-8B-Instruct`).
 - If you want to rerun a particular experiment, remember to clear the saved files, including OpenIE results and knowledge graph, e.g.,
 
 ```sh
@@ -368,13 +321,12 @@ When preparing your data, you may need to chunk each passage, as longer passage 
 │   ├── 📂 information_extraction  # Implementation of all information extraction models
 │   │   ├── __init__.py
 |   |   ├── openie_openai_gpt.py    # Model for OpenIE with OpenAI GPT
-|   |   ├── openie_vllm_offline.py  # Model for OpenIE with LLMs deployed offline with vLLM
+|   |   ├── openie_transformers_offline.py  # Model for OpenIE with local Transformers models
 │   ├── 📂 llm                      # Classes for inference with large language models
 │   │   ├── __init__.py             # Getter function
 |   |   ├── base.py                 # Config class for LLM inference and base LLM inference class to inherit
 |   |   ├── openai_gpt.py           # Class for inference with OpenAI GPT
-|   |   ├── vllm_llama.py           # Class for inference using a local vLLM server
-|   |   ├── vllm_offline.py         # Class for inference using the vLLM API directly
+|   |   ├── transformers_offline.py # Class for inference using local Transformers models
 │   ├── 📂 prompts                  # Prompt templates and prompt template manager class
 |   │   ├── 📂 dspy_prompts         # Prompts for filtering
 |   │   │   ├── ...

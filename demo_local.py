@@ -23,7 +23,7 @@ def main():
 
     save_dir = 'outputs/demo_llama'  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
     llm_model_name = 'meta-llama/Llama-3.1-8B-Instruct'  # Any OpenAI model name
-    embedding_model_name = 'GritLM/GritLM-7B'  # Embedding model name (NV-Embed, GritLM or Contriever for now)
+    embedding_model_name = 'nvidia/NV-Embed-v2'  # Embedding model name
 
     # Startup a HippoRAG instance
     hipporag = HippoRAG(save_dir=save_dir,
