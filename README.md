@@ -79,7 +79,7 @@ docs = [
 
 save_dir = 'outputs'# Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
 llm_model_name = 'gpt-4o-mini' # Any OpenAI model name
-embedding_model_name = 'nvidia/NV-Embed-v2'# Embedding model name (NV-Embed or Contriever)
+embedding_model_name = 'text-embedding-3-small'# Embedding model name (OpenAI embeddings or local models like Contriever)
 
 #Startup a HippoRAG instance
 hipporag = HippoRAG(save_dir=save_dir, 
@@ -215,7 +215,7 @@ conda activate hipporag
 dataset=sample  # or any other dataset under `reproduce/dataset`
 
 # Run OpenAI model
-python main.py --dataset $dataset --llm_base_url https://api.openai.com/v1 --llm_name gpt-4o-mini --embedding_name nvidia/NV-Embed-v2
+python main.py --dataset $dataset --llm_base_url https://api.openai.com/v1 --llm_name gpt-4o-mini --embedding_name text-embedding-3-small
 ```
 
 ### Run with local OpenAI-compatible server
@@ -224,7 +224,7 @@ Start any OpenAI-compatible server and point `--llm_base_url` to it:
 
 ```sh
 dataset=sample
-python main.py --dataset $dataset --llm_base_url http://localhost:8000/v1 --llm_name meta-llama/Llama-3.3-70B-Instruct --embedding_name nvidia/NV-Embed-v2
+python main.py --dataset $dataset --llm_base_url http://localhost:8000/v1 --llm_name meta-llama/Llama-3.3-70B-Instruct --embedding_name facebook/contriever
 ```
 
 #### Advanced: Offline OpenIE (Transformers)
@@ -244,7 +244,7 @@ python main.py --dataset $dataset --openie_mode offline --llm_name Transformers/
 
 ```sh
 rm reproduce/dataset/openie_results/openie_sample_results_ner_meta-llama_Llama-3.3-70B-Instruct_3.json
-rm -rf outputs/sample/sample_meta-llama_Llama-3.3-70B-Instruct_nvidia_NV-Embed-v2
+rm -rf outputs/sample/sample_meta-llama_Llama-3.3-70B-Instruct_facebook_contriever
 ```
 ### Custom Datasets
 
@@ -311,7 +311,6 @@ When preparing your data, you may need to chunk each passage, as longer passage 
 │   ├── 📂 embedding_model          # Implementation of all embedding models
 │   │   ├── __init__.py             # Getter function for get specific embedding model classes
 |   |   ├── base.py                 # Base embedding model class `BaseEmbeddingModel` to inherit and `EmbeddingConfig`
-|   |   ├── NVEmbedV2.py            # Implementation of NV-Embed-v2 model
 |   |   ├── ...
 │   ├── 📂 evaluation               # Implementation of all evaluation metrics
 │   │   ├── __init__.py

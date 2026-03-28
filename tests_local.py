@@ -1,10 +1,5 @@
-import os
-from typing import List
-import json
-import argparse
-import logging
-
 from src.hipporag import HippoRAG
+from src.hipporag.utils.misc_utils import QuerySolution
 
 def main():
 
@@ -23,20 +18,21 @@ def main():
 
     save_dir = 'outputs/local_test'  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
     llm_model_name = 'meta-llama/Llama-3.1-8B-Instruct'  # Any OpenAI model name
-    embedding_model_name = 'nvidia/NV-Embed-v2'  # Embedding model name
+    embedding_model_name = 'Transformers/sentence-transformers/all-MiniLM-L6-v2'  # Embedding model name
+    llm_base_url = "http://localhost:6578/v1"
 
     # Startup a HippoRAG instance
     hipporag = HippoRAG(save_dir=save_dir,
                         llm_model_name=llm_model_name,
                         embedding_model_name=embedding_model_name,
-                        llm_base_url="http://localhost:6578/v1"
+                        llm_base_url=llm_base_url
                         )
 
     # Run indexing
     hipporag.index(docs=docs)
 
     # Separate Retrieval & QA
-    queries = [
+    queries: list[str | QuerySolution] = [
         "What is George Rankin's occupation?",
         "How did Cinderella reach her happy ending?",
         "What county is Erik Hort's birthplace a part of?"
@@ -66,6 +62,7 @@ def main():
     hipporag = HippoRAG(save_dir=save_dir,
                         llm_model_name=llm_model_name,
                         embedding_model_name=embedding_model_name,
+                        llm_base_url=llm_base_url,
                         )
 
     print(hipporag.rag_qa(queries=queries,
@@ -76,6 +73,7 @@ def main():
     hipporag = HippoRAG(save_dir=save_dir,
                         llm_model_name=llm_model_name,
                         embedding_model_name=embedding_model_name,
+                        llm_base_url=llm_base_url,
                         )
 
     new_docs = [

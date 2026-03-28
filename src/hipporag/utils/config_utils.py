@@ -114,8 +114,10 @@ class BaseConfig:
     
     # Embedding specific attributes
     embedding_model_name: str = field(
-        default="nvidia/NV-Embed-v2",
-        metadata={"help": "Class name indicating which embedding model to use."}
+        default="text-embedding-3-small",
+        metadata={
+            "help": "Embedding model to use. Supported patterns: OpenAI embeddings like 'text-embedding-3-small' (API, via embedding_base_url), local Contriever models (e.g. 'facebook/contriever'), or local Sentence-Transformers models via 'Transformers/<hf-id>'."
+        }
     )
     embedding_batch_size: int = field(
         default=16,

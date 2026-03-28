@@ -23,7 +23,7 @@ def main():
 
     save_dir = 'outputs'  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
     llm_model_name = 'gpt-4o-mini'  # Any OpenAI model name
-    embedding_model_name = 'nvidia/NV-Embed-v2'  # Embedding model name
+    embedding_model_name = 'text-embedding-3-small'  # Embedding model name
 
     # Startup a HippoRAG instance
     hipporag = HippoRAG(save_dir=save_dir,

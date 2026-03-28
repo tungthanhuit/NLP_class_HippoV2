@@ -1,6 +1,5 @@
 from .Contriever import ContrieverModel
 from .base import EmbeddingConfig, BaseEmbeddingModel
-from .NVEmbedV2 import NVEmbedV2EmbeddingModel
 from .OpenAI import OpenAIEmbeddingModel
 from .Transformers import TransformersEmbeddingModel
 
@@ -13,7 +12,6 @@ __all__ = [
     "BaseEmbeddingModel",
     "EmbeddingConfig",
     "ContrieverModel",
-    "NVEmbedV2EmbeddingModel",
     "OpenAIEmbeddingModel",
     "TransformersEmbeddingModel",
     "_get_embedding_model_class",
@@ -21,9 +19,7 @@ __all__ = [
 
 
 def _get_embedding_model_class(embedding_model_name: str = "text-embedding-3-small"):
-    if "NV-Embed-v2" in embedding_model_name:
-        return NVEmbedV2EmbeddingModel
-    elif "contriever" in embedding_model_name:
+    if "contriever" in embedding_model_name:
         return ContrieverModel
     elif "text-embedding" in embedding_model_name:
         return OpenAIEmbeddingModel

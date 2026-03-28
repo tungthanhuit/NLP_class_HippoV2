@@ -18,6 +18,7 @@ setuptools.setup(
     install_requires=[
         "torch==2.5.1",
         "transformers==4.45.2",
+        "sentence-transformers==3.3.1",
         "openai==1.91.1",
         "networkx==3.4.2",
         "python_igraph==0.11.8",
