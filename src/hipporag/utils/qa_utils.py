@@ -1,5 +1,3 @@
-
-
 from ..prompts.prompt_template_manager import PromptTemplateManager
 from .logging_utils import get_logger
 from ..llm.openai_gpt import CacheOpenAI
