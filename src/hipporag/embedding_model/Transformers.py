@@ -3,6 +3,7 @@ from typing import List
 import torch
 import numpy as np
 from tqdm import tqdm
+import time
 
 from .base import BaseEmbeddingModel
 from ..utils.config_utils import BaseConfig
@@ -44,11 +45,24 @@ class TransformersEmbeddingModel(BaseEmbeddingModel):
         return np.array(response)
 
     def batch_encode(self, texts: List[str], **kwargs) -> None:
+        start_time = time.time()
+
+        print(
+            f"[Embedding] Transformers model={self.model_id} n={len(texts)} batch_size={self.batch_size}"
+        )
         if len(texts) < self.batch_size:
-            return self.encode(texts)
+            results = self.encode(texts)
+            print(
+                f"[Embedding] done shape={getattr(results, 'shape', '(unknown)')} in {time.time() - start_time:.2f}s"
+            )
+            return results
 
         results = []
         batch_indexes = list(range(0, len(texts), self.batch_size))
         for i in tqdm(batch_indexes, desc="Batch Encoding"):
             results.append(self.encode(texts[i : i + self.batch_size]))
-        return np.concatenate(results)
+        results = np.concatenate(results)
+        print(
+            f"[Embedding] done shape={getattr(results, 'shape', '(unknown)')} in {time.time() - start_time:.2f}s"
+        )
+        return results

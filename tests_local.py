@@ -16,13 +16,12 @@ def main():
         "Marina is bom in Minsk.",
         "Montebello is a part of Rockland County.",
     ]
-
+    llm_model_name = "gpt-4o-mini"  # Any OpenAI model name
+    llm_base_url = "http://localhost:4000/v1"
     save_dir = "outputs/local_test"  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
-    llm_model_name = "meta-llama/Llama-3.1-8B-Instruct"  # Any OpenAI model name
     embedding_model_name = (
         "Transformers/sentence-transformers/all-MiniLM-L6-v2"  # Embedding model name
     )
-    llm_base_url = "http://localhost:6578/v1"
 
     # Startup a HippoRAG instance
     hipporag = HippoRAG(

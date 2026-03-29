@@ -1,6 +1,8 @@
 from copy import deepcopy
 from typing import List, Optional
 
+import time
+
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -84,6 +86,8 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
         if isinstance(texts, str):
             texts = [texts]
 
+        start_time = time.time()
+
         params = deepcopy(self.embedding_config.encode_params)
         if kwargs:
             params.update(kwargs)
@@ -96,6 +100,10 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
         logger.debug(f"Calling {self.__class__.__name__} with:\n{params}")
 
         batch_size = params.pop("batch_size", 16)
+
+        print(
+            f"[Embedding] OpenAI model={self.embedding_model_name} n={len(texts)} batch_size={batch_size}"
+        )
 
         if len(texts) <= batch_size:
             results = self.encode(texts)
@@ -118,5 +126,12 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
             results = results.numpy()
         if self.embedding_config.norm:
             results = (results.T / np.linalg.norm(results, axis=1)).T
+
+        elapsed = time.time() - start_time
+        try:
+            shape = results.shape
+        except Exception:
+            shape = "(unknown)"
+        print(f"[Embedding] done shape={shape} in {elapsed:.2f}s")
 
         return results

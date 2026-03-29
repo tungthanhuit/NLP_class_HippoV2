@@ -1,6 +1,13 @@
 from src.hipporag import HippoRAG
 
 
+def _print_qa_round(round_name, query_solutions):
+    print(f"\n=== {round_name}: Questions & Answers ===")
+    for i, qs in enumerate(query_solutions, start=1):
+        print(f"\n[{i}] Q: {qs.question}")
+        print(f"    A: {qs.answer}")
+
+
 def main():
 
     # Prepare datasets and evaluation
@@ -58,9 +65,14 @@ def main():
         ],
     ]
 
-    print(
-        hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)[-2:]
-    )
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    query_solutions = result[0]
+    overall_retrieval_result = result[3] if len(result) > 3 else None
+    overall_qa_results = result[4] if len(result) > 4 else None
+    _print_qa_round("First round", query_solutions)
+    print("\n=== First round: Metrics ===")
+    print(overall_retrieval_result)
+    print(overall_qa_results)
     print("First round.")
 
     # Startup a HippoRAG instance
@@ -72,9 +84,14 @@ def main():
         embedding_base_url=embedding_base_url,
     )
 
-    print(
-        hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)[-2:]
-    )
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    query_solutions = result[0]
+    overall_retrieval_result = result[3] if len(result) > 3 else None
+    overall_qa_results = result[4] if len(result) > 4 else None
+    _print_qa_round("Second round", query_solutions)
+    print("\n=== Second round: Metrics ===")
+    print(overall_retrieval_result)
+    print(overall_qa_results)
     print("Second round.")
 
     # Startup a HippoRAG instance
@@ -97,9 +114,14 @@ def main():
     # Run indexing
     hipporag.index(docs=new_docs)
 
-    print(
-        hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)[-2:]
-    )
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    query_solutions = result[0]
+    overall_retrieval_result = result[3] if len(result) > 3 else None
+    overall_qa_results = result[4] if len(result) > 4 else None
+    _print_qa_round("Third round", query_solutions)
+    print("\n=== Third round: Metrics ===")
+    print(overall_retrieval_result)
+    print(overall_qa_results)
     print("Third round done.")
 
     docs_to_delete = [
@@ -112,9 +134,14 @@ def main():
 
     hipporag.delete(docs_to_delete)
 
-    print(
-        hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)[-2:]
-    )
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    query_solutions = result[0]
+    overall_retrieval_result = result[3] if len(result) > 3 else None
+    overall_qa_results = result[4] if len(result) > 4 else None
+    _print_qa_round("Final round", query_solutions)
+    print("\n=== Final round: Metrics ===")
+    print(overall_retrieval_result)
+    print(overall_qa_results)
     print("Final round.")
 
 

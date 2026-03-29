@@ -4,6 +4,7 @@ from typing import List
 import logging
 from copy import deepcopy
 import pandas as pd
+import time
 
 from .utils.misc_utils import compute_mdhash_id
 
@@ -85,13 +86,32 @@ class EmbeddingStore:
             f"Inserting {len(missing_ids)} new records, {len(all_hash_ids) - len(missing_ids)} records already exist."
         )
 
+        if len(missing_ids) == 0:
+            # Helpful console signal that embeddings are coming from cache.
+            print(
+                f"[EmbeddingStore:{self.namespace}] cache hit: {len(all_hash_ids)} records already exist"
+            )
+
         if not missing_ids:
             return {}  # All records already exist.
 
         # Prepare the texts to encode from the "content" field.
         texts_to_encode = [nodes_dict[hash_id]["content"] for hash_id in missing_ids]
 
+        print(
+            f"[EmbeddingStore:{self.namespace}] encoding {len(texts_to_encode)} new texts..."
+        )
+        start_time = time.time()
         missing_embeddings = self.embedding_model.batch_encode(texts_to_encode)
+        elapsed = time.time() - start_time
+
+        try:
+            emb_shape = np.asarray(missing_embeddings).shape
+        except Exception:
+            emb_shape = "(unknown)"
+        print(
+            f"[EmbeddingStore:{self.namespace}] encoded shape={emb_shape} in {elapsed:.2f}s"
+        )
 
         self._upsert(missing_ids, texts_to_encode, missing_embeddings)
 

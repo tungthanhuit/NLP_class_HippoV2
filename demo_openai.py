@@ -1,6 +1,13 @@
 from src.hipporag import HippoRAG
 
 
+def _print_qa(query_solutions):
+    print("\n=== Questions & Answers ===")
+    for i, qs in enumerate(query_solutions, start=1):
+        print(f"\n[{i}] Q: {qs.question}")
+        print(f"    A: {qs.answer}")
+
+
 def main():
 
     # Prepare datasets and evaluation
@@ -16,15 +23,19 @@ def main():
         "Montebello is a part of Rockland County.",
     ]
 
-    save_dir = "outputs/openai"  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
     llm_model_name = "gpt-4o-mini"  # Any OpenAI model name
     embedding_model_name = "text-embedding-3-small"  # Embedding model name
+    llm_base_url = "http://localhost:4000/v1"
+    embedding_base_url = "http://localhost:4000/v1"
+    save_dir = "outputs/openai"  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
 
     # Startup a HippoRAG instance
     hipporag = HippoRAG(
         save_dir=save_dir,
         llm_model_name=llm_model_name,
         embedding_model_name=embedding_model_name,
+        llm_base_url=llm_base_url,
+        embedding_base_url=embedding_base_url,
     )
 
     # Run indexing
@@ -53,7 +64,19 @@ def main():
         ],
     ]
 
-    print(hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers))
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+
+    query_solutions = result[0]
+    overall_retrieval_result = result[3] if len(result) > 3 else None
+    overall_qa_results = result[4] if len(result) > 4 else None
+
+    _print_qa(query_solutions)
+
+    print("\n=== Metrics ===")
+    if overall_retrieval_result is not None:
+        print("Retrieval:", overall_retrieval_result)
+    if overall_qa_results is not None:
+        print("QA:", overall_qa_results)
 
 
 if __name__ == "__main__":
