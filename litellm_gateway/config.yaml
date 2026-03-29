@@ -5,7 +5,7 @@
 # Upstream
 #   BASE_URL: https://mkp-api.fptcloud.com
 # Auth
-#   Export FPT_API_KEY in your shell (see .env.example)
+#   Set FPT_API_KEY via your shell or a .env file loaded by start_gateway.sh
 
 model_list:
   # Chat / LLM

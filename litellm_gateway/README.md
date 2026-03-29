@@ -17,7 +17,12 @@ From repo root:
 
 ## Run
 
-1) Set your upstream API key:
+1) Put your upstream API key in a `.env` file (recommended):
+
+- Create `litellm_gateway/.env` with:
+  - `FPT_API_KEY="..."`
+
+Alternatively, you can still use shell exports:
 
 - `export FPT_API_KEY="..."`
 
@@ -34,6 +39,10 @@ If your upstream expects OpenAI-style routes under `/v1`, update `api_base` in `
 Override host/port (optional):
 
 - `LITELLM_HOST=127.0.0.1 LITELLM_PORT=4000 ./litellm_gateway/start_gateway.sh`
+
+If you keep your `.env` somewhere else:
+
+- `LITELLM_DOTENV_PATH=/path/to/.env ./litellm_gateway/start_gateway.sh`
 
 ## Use (OpenAI-compatible)
 
