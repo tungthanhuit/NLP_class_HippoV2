@@ -1,6 +1,8 @@
 openai==1.91.0
 litellm[proxy]
 
+gradio==5.50.0
+
 # Force CPU-only PyTorch wheels
 --index-url https://download.pytorch.org/whl/cpu
 --extra-index-url https://pypi.org/simple
