@@ -499,8 +499,8 @@ class HippoRAG:
     def rag_qa(
         self,
         queries: List[str | QuerySolution],
-        gold_docs: List[List[str]] = None,
-        gold_answers: List[List[str]] = None,
+        gold_docs: List[List[str]] | None = None,
+        gold_answers: List[List[str]] | None = None,
     ) -> (
         Tuple[List[QuerySolution], List[str], List[Dict]]
         | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]

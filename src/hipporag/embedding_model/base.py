@@ -237,28 +237,56 @@ class BaseEmbeddingModel:
 class EmbeddingCache:
     """A multiprocessing-safe global cache for storing embeddings."""
 
-    _manager = multiprocessing.Manager()
-    _cache = _manager.dict()  # Shared dictionary for multiprocessing
-    _lock = threading.Lock()  # Thread-safe lock for concurrent access
+    _manager = None
+    _cache = {}
+    _lock = threading.Lock()
+    _initialized = False
+
+    @classmethod
+    def _ensure_initialized(cls):
+        if cls._initialized:
+            return
+
+        with cls._lock:
+            if cls._initialized:
+                return
+
+            try:
+                # Lazily create the manager to avoid spawning a process at import time.
+                cls._manager = multiprocessing.Manager()
+                cls._cache = cls._manager.dict()
+            except Exception:
+                logger.warning(
+                    "Failed to initialize multiprocessing embedding cache; using local in-process cache instead.",
+                    exc_info=True,
+                )
+                cls._manager = None
+                cls._cache = {}
+
+            cls._initialized = True
 
     @classmethod
     def get(cls, content):
         """Retrieve the embedding if cached."""
+        cls._ensure_initialized()
         return cls._cache.get(content)
 
     @classmethod
     def set(cls, content, embedding):
         """Store an embedding in the cache."""
-        with cls._lock:  # Ensures thread safety
+        cls._ensure_initialized()
+        with cls._lock:
             cls._cache[content] = embedding
 
     @classmethod
     def contains(cls, content):
         """Check if the embedding exists in cache."""
+        cls._ensure_initialized()
         return content in cls._cache
 
     @classmethod
     def clear(cls):
         """Clear the entire cache."""
+        cls._ensure_initialized()
         with cls._lock:
             cls._cache.clear()

@@ -30,6 +30,11 @@ Alternatively, you can still use shell exports:
 
 - `./litellm_gateway/start_gateway.sh`
 
+Auth note:
+
+- If `general_settings.master_key` is NOT set in `litellm_gateway/config.yaml`, the launcher ignores `LITELLM_MASTER_KEY` from env to avoid accidental DB-backed key validation errors.
+- If you DO enable `general_settings.master_key`, clients must send the same key (for OpenAI SDK clients, set `OPENAI_API_KEY` to that master key).
+
 By default it listens on:
 
 - `http://localhost:4000`

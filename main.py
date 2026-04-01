@@ -8,22 +8,22 @@ from src.hipporag.utils.config_utils import BaseConfig
 
 import argparse
 
-# os.environ["LOG_LEVEL"] = "DEBUG"
+os.environ["LOG_LEVEL"] = "DEBUG"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import logging
 
 
-def get_gold_docs(samples: List, dataset_name: str = None) -> List:
+def get_gold_docs(samples: List, dataset_name: str | None = None) -> List:
     gold_docs = []
     for sample in samples:
         if "supporting_facts" in sample:  # hotpotqa, 2wikimultihopqa
-            gold_title = set([item[0] for item in sample["supporting_facts"]])
+            gold_title = [item[0] for item in sample["supporting_facts"]]
             gold_title_and_content_list = [
                 item for item in sample["context"] if item[0] in gold_title
             ]
-            if dataset_name.startswith("hotpotqa"):
+            if dataset_name and dataset_name.startswith("hotpotqa"):
                 gold_doc = [
                     item[0] + "\n" + "".join(item[1])
                     for item in gold_title_and_content_list
