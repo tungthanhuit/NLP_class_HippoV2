@@ -61,6 +61,44 @@ class BaseConfig:
         },
     )
 
+    # KB backend (persistence)
+    kb_backend: Literal["parquet", "neo4j"] = field(
+        default="parquet",
+        metadata={
+            "help": "Knowledge base backend for persistence. 'parquet' uses local parquet+pickle+json; 'neo4j' stores KB in Neo4j."
+        },
+    )
+
+    # Neo4j KB backend specific attributes
+    neo4j_uri: str = field(
+        default="bolt://localhost:7687",
+        metadata={"help": "Neo4j Bolt URI (e.g., bolt://localhost:7687)."},
+    )
+    neo4j_user: str = field(
+        default="neo4j",
+        metadata={"help": "Neo4j username."},
+    )
+    neo4j_password: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Neo4j password. If None, reads from env NEO4J_PASSWORD."
+        },
+    )
+    neo4j_database: str = field(
+        default="neo4j",
+        metadata={"help": "Neo4j database name."},
+    )
+    neo4j_namespace: str = field(
+        default="hipporag",
+        metadata={
+            "help": "Namespace prefix used to isolate KB data within a shared Neo4j instance."
+        },
+    )
+    neo4j_batch_size: int = field(
+        default=500,
+        metadata={"help": "Batch size for Neo4j UNWIND writes/reads."},
+    )
+
     # Storage specific attributes
     force_index_from_scratch: bool = field(
         default=False,

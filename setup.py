@@ -25,6 +25,7 @@ setuptools.setup(
         "tiktoken==0.7.0",
         "pydantic==2.10.4",
         "tenacity==8.5.0",
+        "neo4j>=5.20.0",
         "tqdm",  # No version specified
     ],
 )

@@ -132,24 +132,77 @@ class HippoRAG:
             global_config=self.global_config,
             embedding_model_name=self.global_config.embedding_model_name,
         )
-        self.chunk_embedding_store = EmbeddingStore(
-            self.embedding_model,
-            os.path.join(self.working_dir, "chunk_embeddings"),
-            self.global_config.embedding_batch_size,
-            "chunk",
-        )
-        self.entity_embedding_store = EmbeddingStore(
-            self.embedding_model,
-            os.path.join(self.working_dir, "entity_embeddings"),
-            self.global_config.embedding_batch_size,
-            "entity",
-        )
-        self.fact_embedding_store = EmbeddingStore(
-            self.embedding_model,
-            os.path.join(self.working_dir, "fact_embeddings"),
-            self.global_config.embedding_batch_size,
-            "fact",
-        )
+
+        self.kb = None
+        if self.global_config.kb_backend == "neo4j":
+            try:
+                from .kb.neo4j_store import Neo4jConfig, Neo4jEmbeddingStore, Neo4jKB
+            except Exception as e:
+                raise ImportError(
+                    "Neo4j KB backend requested but dependencies are missing. "
+                    "Install the 'neo4j' Python package and ensure Neo4j is reachable."
+                ) from e
+
+            password = self.global_config.neo4j_password or os.getenv(
+                "NEO4J_PASSWORD"
+            )
+            if not password:
+                raise ValueError(
+                    "kb_backend='neo4j' requires neo4j_password or env NEO4J_PASSWORD"
+                )
+
+            ns = f"{self.global_config.neo4j_namespace}_{llm_label}_{embedding_label}"
+            self.kb = Neo4jKB(
+                Neo4jConfig(
+                    uri=self.global_config.neo4j_uri,
+                    user=self.global_config.neo4j_user,
+                    password=password,
+                    database=self.global_config.neo4j_database,
+                    namespace=ns,
+                    batch_size=self.global_config.neo4j_batch_size,
+                )
+            )
+            if self.global_config.force_index_from_scratch:
+                logger.info("Clearing Neo4j namespace (force_index_from_scratch)")
+                self.kb.clear_namespace()
+
+            self.chunk_embedding_store = Neo4jEmbeddingStore(
+                self.embedding_model,
+                kb=self.kb,
+                label=self.kb.CHUNK_LABEL,
+                namespace="chunk",
+            )
+            self.entity_embedding_store = Neo4jEmbeddingStore(
+                self.embedding_model,
+                kb=self.kb,
+                label=self.kb.ENTITY_LABEL,
+                namespace="entity",
+            )
+            self.fact_embedding_store = Neo4jEmbeddingStore(
+                self.embedding_model,
+                kb=self.kb,
+                label=self.kb.FACT_LABEL,
+                namespace="fact",
+            )
+        else:
+            self.chunk_embedding_store = EmbeddingStore(
+                self.embedding_model,
+                os.path.join(self.working_dir, "chunk_embeddings"),
+                self.global_config.embedding_batch_size,
+                "chunk",
+            )
+            self.entity_embedding_store = EmbeddingStore(
+                self.embedding_model,
+                os.path.join(self.working_dir, "entity_embeddings"),
+                self.global_config.embedding_batch_size,
+                "entity",
+            )
+            self.fact_embedding_store = EmbeddingStore(
+                self.embedding_model,
+                os.path.join(self.working_dir, "fact_embeddings"),
+                self.global_config.embedding_batch_size,
+                "fact",
+            )
 
         self.prompt_template_manager = PromptTemplateManager(
             role_mapping={"system": "system", "user": "user", "assistant": "assistant"}
@@ -185,6 +238,10 @@ class HippoRAG:
         Raises:
             None
         """
+        if self.global_config.kb_backend == "neo4j":
+            self._graph_pickle_filename = None
+            return ig.Graph(directed=self.global_config.is_directed_graph)
+
         self._graph_pickle_filename = os.path.join(self.working_dir, f"graph.pickle")
 
         preloaded_graph = None
@@ -210,6 +267,10 @@ class HippoRAG:
             docs : List[str]
                 A list of documents to be indexed.
         """
+
+        if self.global_config.kb_backend == "neo4j":
+            self._index_neo4j(docs)
+            return
 
         logger.info(f"Indexing Documents")
 
@@ -274,6 +335,94 @@ class HippoRAG:
             self.augment_graph()
             self.save_igraph()
 
+        self.ready_to_retrieve = False
+
+    def _index_neo4j(self, docs: List[str]):
+        if self.kb is None:
+            raise RuntimeError("Neo4j KB is not initialized")
+
+        logger.info("Indexing Documents (Neo4j KB backend)")
+        logger.info("Performing OpenIE")
+
+        self.chunk_embedding_store.insert_strings(docs)
+        self.chunk_embedding_store.refresh()
+        chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
+
+        all_openie_info, chunk_keys_to_process = self.load_existing_openie(
+            list(chunk_to_rows.keys())
+        )
+        new_openie_rows = {k: chunk_to_rows[k] for k in chunk_keys_to_process}
+
+        if len(chunk_keys_to_process) > 0:
+            new_ner_results_dict, new_triple_results_dict = self.openie.batch_openie(
+                new_openie_rows
+            )
+            self.merge_openie_results(
+                all_openie_info,
+                new_openie_rows,
+                new_ner_results_dict,
+                new_triple_results_dict,
+            )
+
+        if self.global_config.save_openie:
+            self.save_openie_results(all_openie_info)
+
+        if len(chunk_keys_to_process) == 0:
+            logger.info("No new chunks detected for KB graph update")
+            self.ready_to_retrieve = False
+            return
+
+        ner_results_dict, triple_results_dict = reformat_openie_results(all_openie_info)
+
+        new_chunk_ids = list(chunk_keys_to_process)
+        chunk_triples = [
+            [text_processing(t) for t in triple_results_dict[chunk_id].triples]
+            for chunk_id in new_chunk_ids
+        ]
+        entity_nodes, chunk_triple_entities = extract_entity_nodes(chunk_triples)
+        facts = flatten_facts(chunk_triples)
+
+        logger.info("Encoding Entities")
+        self.entity_embedding_store.insert_strings(entity_nodes)
+        self.entity_embedding_store.refresh()
+
+        logger.info("Encoding Facts")
+        self.fact_embedding_store.insert_strings([str(fact) for fact in facts])
+        self.fact_embedding_store.refresh()
+
+        logger.info("Persisting chunk-entity edges to Neo4j")
+        for chunk_id, ents in zip(new_chunk_ids, chunk_triple_entities):
+            ent_ids = [compute_mdhash_id(e, prefix="entity-") for e in ents]
+            self.kb.upsert_chunk_entity_edges(chunk_id, ent_ids)
+
+        logger.info("Persisting chunk-fact edges to Neo4j")
+        for chunk_id, triples in zip(new_chunk_ids, chunk_triples):
+            fact_texts = [str(tuple(t)) for t in triples if len(t) == 3]
+            fact_ids = [compute_mdhash_id(text, prefix="fact-") for text in fact_texts]
+            self.kb.upsert_chunk_fact_edges(chunk_id, fact_ids)
+
+        logger.info("Persisting co-occurrence edges to Neo4j")
+        pairs: List[Tuple[str, str]] = []
+        for triples in chunk_triples:
+            for triple in triples:
+                if len(triple) != 3:
+                    continue
+                s_id = compute_mdhash_id(triple[0], prefix="entity-")
+                o_id = compute_mdhash_id(triple[2], prefix="entity-")
+                pairs.append((s_id, o_id))
+                pairs.append((o_id, s_id))
+        self.kb.increment_cooccur_edges(pairs, weight=1)
+
+        logger.info("Persisting synonymy edges to Neo4j")
+        self.node_to_node_stats = {}
+        self.add_synonymy_edges()
+        synonym_edges: List[Tuple[str, str, float]] = [
+            (src, dst, float(w)) for (src, dst), w in self.node_to_node_stats.items()
+        ]
+        self.kb.upsert_synonym_edges(synonym_edges)
+
+        self.ready_to_retrieve = False
+
     def delete(self, docs_to_delete: List[str]):
         """
         Deletes the given documents from all data structures within the HippoRAG class.
@@ -283,6 +432,10 @@ class HippoRAG:
             docs : List[str]
                 A list of documents to be deleted.
         """
+
+        if self.global_config.kb_backend == "neo4j":
+            self._delete_neo4j(docs_to_delete)
+            return
 
         # Making sure that all the necessary structures have been built.
         if not self.ready_to_retrieve:
@@ -373,6 +526,30 @@ class HippoRAG:
         )
         self.save_igraph()
 
+        self.ready_to_retrieve = False
+
+    def _delete_neo4j(self, docs_to_delete: List[str]):
+        if self.kb is None:
+            raise RuntimeError("Neo4j KB is not initialized")
+
+        self.chunk_embedding_store.refresh()
+
+        current_docs = set(self.chunk_embedding_store.get_all_texts())
+        docs_to_delete = [doc for doc in docs_to_delete if doc in current_docs]
+        if not docs_to_delete:
+            logger.info("No matching docs to delete")
+            return
+
+        chunk_ids_to_delete = [
+            self.chunk_embedding_store.text_to_hash_id[doc] for doc in docs_to_delete
+        ]
+
+        logger.info("Deleting %d chunks (Neo4j KB backend)", len(chunk_ids_to_delete))
+        self.kb.delete_chunks_and_cleanup(chunk_ids_to_delete)
+
+        self.chunk_embedding_store.refresh()
+        self.entity_embedding_store.refresh()
+        self.fact_embedding_store.refresh()
         self.ready_to_retrieve = False
 
     def retrieve(
@@ -1062,6 +1239,27 @@ class HippoRAG:
                                          be saved or processed.
         """
 
+        if self.global_config.kb_backend == "neo4j":
+            if self.kb is None:
+                raise RuntimeError("Neo4j KB is not initialized")
+
+            # If chunk_keys is empty, load all OpenIE docs from Neo4j.
+            if len(chunk_keys) == 0:
+                all_openie_info = self.kb.load_openie_docs(None)
+                return all_openie_info, set()
+
+            if self.global_config.force_openie_from_scratch:
+                return [], set(chunk_keys)
+
+            existing_docs = self.kb.load_openie_docs(list(chunk_keys))
+            existing_ids = set(
+                [d["idx"] for d in existing_docs if d.get("has_openie", False)]
+            )
+            chunk_keys_to_save = set([ck for ck in chunk_keys if ck not in existing_ids])
+            # Only return processed docs to match file behavior ("idx" existence).
+            processed_docs = [d for d in existing_docs if d.get("has_openie", False)]
+            return processed_docs, chunk_keys_to_save
+
         # combine openie_results with contents already in file, if file exists
         chunk_keys_to_save = set()
 
@@ -1155,6 +1353,13 @@ class HippoRAG:
                 List of dictionaries, where each dictionary represents information from OpenIE, including
                 extracted entities.
         """
+
+        if self.global_config.kb_backend == "neo4j":
+            if self.kb is None:
+                raise RuntimeError("Neo4j KB is not initialized")
+            self.kb.upsert_chunk_openie(all_openie_info)
+            logger.info("OpenIE results saved to Neo4j")
+            return
 
         sum_phrase_chars = sum(
             [len(e) for chunk in all_openie_info for e in chunk["extracted_entities"]]
@@ -1276,6 +1481,8 @@ class HippoRAG:
         self.graph.add_edges(valid_edges, attributes=valid_weights)
 
     def save_igraph(self):
+        if self.global_config.kb_backend == "neo4j":
+            return
         logger.info(
             f"Writing graph with {len(self.graph.vs())} nodes, {len(self.graph.es())} edges"
         )
@@ -1350,6 +1557,10 @@ class HippoRAG:
         Prepares various in-memory objects and attributes necessary for fast retrieval processes, such as embedding data and graph relationships, ensuring consistency
         and alignment with the underlying graph structure.
         """
+
+        if self.global_config.kb_backend == "neo4j":
+            self._prepare_retrieval_objects_neo4j()
+            return
 
         logger.info("Preparing for fast retrieval.")
 
@@ -1488,6 +1699,71 @@ class HippoRAG:
             self.node_to_node_stats = {}
             self.ent_node_to_chunk_ids = {}
             self.add_fact_edges(self.passage_node_keys, chunk_triples)
+
+        self.ready_to_retrieve = True
+
+    def _prepare_retrieval_objects_neo4j(self):
+        if self.kb is None:
+            raise RuntimeError("Neo4j KB is not initialized")
+
+        logger.info("Preparing for fast retrieval (Neo4j KB backend)")
+        self.query_to_embedding = {"triple": {}, "passage": {}}
+
+        # Refresh stores from Neo4j
+        self.chunk_embedding_store.refresh()
+        self.entity_embedding_store.refresh()
+        self.fact_embedding_store.refresh()
+
+        self.entity_node_keys = list(self.entity_embedding_store.get_all_ids())
+        self.passage_node_keys = list(self.chunk_embedding_store.get_all_ids())
+        self.fact_node_keys = list(self.fact_embedding_store.get_all_ids())
+
+        # Build igraph from persisted Neo4j edges
+        self.graph = ig.Graph(directed=self.global_config.is_directed_graph)
+        self.node_to_node_stats = self.kb.load_all_graph_edges()
+        self.ent_node_to_chunk_ids = self.kb.load_ent_node_to_chunk_ids()
+
+        self.add_new_nodes()
+        self.add_new_edges()
+
+        igraph_name_to_idx = {
+            node["name"]: idx for idx, node in enumerate(self.graph.vs)
+        }
+        self.node_name_to_vertex_idx = igraph_name_to_idx
+        self.entity_node_idxs = [
+            igraph_name_to_idx[k]
+            for k in self.entity_node_keys
+            if k in igraph_name_to_idx
+        ]
+        self.passage_node_idxs = [
+            igraph_name_to_idx[k]
+            for k in self.passage_node_keys
+            if k in igraph_name_to_idx
+        ]
+
+        logger.info("Loading embeddings.")
+        self.entity_embeddings = np.array(
+            self.entity_embedding_store.get_embeddings(self.entity_node_keys)
+        )
+        self.passage_embeddings = np.array(
+            self.chunk_embedding_store.get_embeddings(self.passage_node_keys)
+        )
+        self.fact_embeddings = np.array(
+            self.fact_embedding_store.get_embeddings(self.fact_node_keys)
+        )
+
+        all_openie_info, _ = self.load_existing_openie([])
+        self.proc_triples_to_docs = {}
+        for doc in all_openie_info:
+            triples = flatten_facts([doc.get("extracted_triples") or []])
+            for triple in triples:
+                if len(triple) == 3:
+                    proc_triple = tuple(text_processing(list(triple)))
+                    self.proc_triples_to_docs[str(proc_triple)] = (
+                        self.proc_triples_to_docs.get(str(proc_triple), set()).union(
+                            set([doc["idx"]])
+                        )
+                    )
 
         self.ready_to_retrieve = True
 

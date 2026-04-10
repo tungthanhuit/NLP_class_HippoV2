@@ -102,6 +102,36 @@ qa_results = hipporag.rag_qa(retrieval_results)
 #Combined Retrieval & QA
 rag_results = hipporag.rag_qa(queries=queries)
 
+### Neo4j KB Backend
+
+By default, HippoRAG persists its KB locally (Parquet embeddings + `graph.pickle` + OpenIE JSON). You can switch persistence to Neo4j for both indexing and inference by setting `kb_backend="neo4j"` in `BaseConfig`.
+
+Prereqs:
+- Neo4j 5.x running (e.g., local Docker) and reachable at `neo4j_uri`.
+- Set `NEO4J_PASSWORD` (or pass `neo4j_password` in config).
+
+Example:
+
+```python
+import os
+from hipporag import HippoRAG
+from hipporag.utils.config_utils import BaseConfig
+
+cfg = BaseConfig(
+  kb_backend="neo4j",
+  save_dir="outputs",
+  llm_name="gpt-4o-mini",
+  embedding_model_name="text-embedding-3-small",
+  neo4j_uri="bolt://localhost:7687",
+  neo4j_user="neo4j",
+  neo4j_password=os.environ["NEO4J_PASSWORD"],
+)
+
+hipporag = HippoRAG(global_config=cfg)
+hipporag.index(docs=docs)
+results = hipporag.rag_qa(queries=queries)
+```
+
 #For Evaluation
 answers = [
     ["Politician"],

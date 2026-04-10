@@ -18,3 +18,4 @@ nest_asyncio
 numpy
 tqdm
 pyarrow
+neo4j>=5.20.0
