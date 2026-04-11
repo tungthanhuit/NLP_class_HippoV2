@@ -119,6 +119,35 @@ docker run --name neo4j-hipporag \
   neo4j:5.26.24
 ```
 
+### Milvus Chunk Vector Backend (optional)
+
+When using the Neo4j KB backend, you can store/search *chunk (passage) embeddings* in Milvus for scalable dense retrieval.
+
+- Neo4j remains the source of truth for chunk content, OpenIE metadata, and graph edges.
+- Entity/fact embeddings remain stored in Neo4j in this implementation.
+
+To enable it:
+
+```bash
+export HIPPORAG_CHUNK_VECTOR_BACKEND=milvus
+export MILVUS_URI=http://localhost:19530
+```
+
+Then run the Neo4j test as usual:
+
+```bash
+python tests_neo4j.py
+```
+
+Requirements:
+- Install `pymilvus` (see `requirements.txt`).
+- Run Milvus locally and make it reachable at `MILVUS_URI`. For Docker on Linux, Milvus provides a standalone launch script that starts a container named `milvus` on port `19530`:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/milvus-io/milvus/master/scripts/standalone_embed.sh -o standalone_embed.sh
+bash standalone_embed.sh start
+```
+
 Example:
 
 ```python

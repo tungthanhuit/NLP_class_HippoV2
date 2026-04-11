@@ -98,6 +98,14 @@ class HippoRAG:
         if embedding_trust_remote_code is not None:
             self.global_config.embedding_trust_remote_code = embedding_trust_remote_code
 
+        if (
+            getattr(self.global_config, "chunk_vector_backend", "default") == "milvus"
+            and self.global_config.kb_backend != "neo4j"
+        ):
+            raise ValueError(
+                "chunk_vector_backend='milvus' currently requires kb_backend='neo4j'"
+            )
+
         _print_config = ",\n  ".join(
             [f"{k} = {v}" for k, v in asdict(self.global_config).items()]
         )
@@ -166,12 +174,36 @@ class HippoRAG:
                 logger.info("Clearing Neo4j namespace (force_index_from_scratch)")
                 self.kb.clear_namespace()
 
-            self.chunk_embedding_store = Neo4jEmbeddingStore(
+            base_chunk_store = Neo4jEmbeddingStore(
                 self.embedding_model,
                 kb=self.kb,
                 label=self.kb.CHUNK_LABEL,
                 namespace="chunk",
             )
+
+            self._milvus_chunk_vectors = None
+            if self.global_config.chunk_vector_backend == "milvus":
+                try:
+                    from .kb.milvus_store import MilvusVectorStore, Neo4jMilvusEmbeddingStore
+                except Exception as e:
+                    raise ImportError(
+                        "chunk_vector_backend='milvus' requested but Milvus dependencies are missing. "
+                        "Install 'pymilvus' and ensure Milvus is reachable."
+                    ) from e
+
+                collection_name = f"{self.global_config.milvus_collection_prefix}_{ns}_chunk"
+                self._milvus_chunk_vectors = MilvusVectorStore(
+                    cfg=self.global_config,
+                    collection_name=collection_name,
+                    id_field="id",
+                    vector_field="vector",
+                )
+                self.chunk_embedding_store = Neo4jMilvusEmbeddingStore(
+                    neo4j_store=base_chunk_store,
+                    milvus=self._milvus_chunk_vectors,
+                )
+            else:
+                self.chunk_embedding_store = base_chunk_store
             self.entity_embedding_store = Neo4jEmbeddingStore(
                 self.embedding_model,
                 kb=self.kb,
@@ -545,6 +577,19 @@ class HippoRAG:
         ]
 
         logger.info("Deleting %d chunks (Neo4j KB backend)", len(chunk_ids_to_delete))
+
+        # If chunk vectors are mirrored to Milvus, delete vectors first while Neo4j
+        # chunk nodes still exist (Neo4j cleanup reads OpenIE triples off chunks).
+        if (
+            getattr(self.global_config, "chunk_vector_backend", "default") == "milvus"
+            and self._milvus_chunk_vectors is not None
+        ):
+            try:
+                self.chunk_embedding_store.delete(chunk_ids_to_delete)
+            except Exception:
+                logger.exception("Failed deleting chunk vectors from Milvus")
+                raise
+
         self.kb.delete_chunks_and_cleanup(chunk_ids_to_delete)
 
         self.chunk_embedding_store.refresh()
@@ -1718,6 +1763,23 @@ class HippoRAG:
         self.passage_node_keys = list(self.chunk_embedding_store.get_all_ids())
         self.fact_node_keys = list(self.fact_embedding_store.get_all_ids())
 
+        if (
+            getattr(self.global_config, "chunk_vector_backend", "default") == "milvus"
+            and getattr(self, "_milvus_chunk_vectors", None) is not None
+            and hasattr(self.chunk_embedding_store, "ensure_milvus_populated")
+        ):
+            try:
+                self.chunk_embedding_store.ensure_milvus_populated(self.passage_node_keys)
+            except Exception:
+                logger.exception(
+                    "Milvus backfill failed; Milvus search may return empty results"
+                )
+
+        # Helpful mapping for Milvus search results -> local indices.
+        self.passage_key_to_idx = {
+            k: i for i, k in enumerate(self.passage_node_keys)
+        }
+
         # Build igraph from persisted Neo4j edges
         self.graph = ig.Graph(directed=self.global_config.is_directed_graph)
         self.node_to_node_stats = self.kb.load_all_graph_edges()
@@ -1745,9 +1807,18 @@ class HippoRAG:
         self.entity_embeddings = np.array(
             self.entity_embedding_store.get_embeddings(self.entity_node_keys)
         )
-        self.passage_embeddings = np.array(
-            self.chunk_embedding_store.get_embeddings(self.passage_node_keys)
-        )
+
+        if (
+            getattr(self.global_config, "chunk_vector_backend", "default")
+            == "milvus"
+            and self._milvus_chunk_vectors is not None
+        ):
+            # Passage vectors are retrieved directly from Milvus at query time.
+            self.passage_embeddings = None
+        else:
+            self.passage_embeddings = np.array(
+                self.chunk_embedding_store.get_embeddings(self.passage_node_keys)
+            )
         self.fact_embeddings = np.array(
             self.fact_embedding_store.get_embeddings(self.fact_node_keys)
         )
@@ -1890,6 +1961,50 @@ class HippoRAG:
             query_embedding = self.embedding_model.batch_encode(
                 query, instruction=get_query_instruction("query_to_passage"), norm=True
             )
+
+        # Milvus-backed dense retrieval (top-k only)
+        if (
+            getattr(self.global_config, "chunk_vector_backend", "default") == "milvus"
+            and self._milvus_chunk_vectors is not None
+        ):
+            top_k = int(
+                min(
+                    len(self.passage_node_keys),
+                    max(
+                        getattr(self.global_config, "milvus_dense_top_k", 200),
+                        self.global_config.retrieval_top_k,
+                    ),
+                )
+            )
+            res = self._milvus_chunk_vectors.search(
+                query_vector=query_embedding,
+                top_k=top_k,
+                search_params=getattr(self.global_config, "milvus_search_params", None),
+            )
+
+            doc_ids: List[int] = []
+            raw_scores: List[float] = []
+            for hid, score in zip(res.ids, res.scores):
+                idx = getattr(self, "passage_key_to_idx", {}).get(hid)
+                if idx is None:
+                    continue
+                doc_ids.append(int(idx))
+                raw_scores.append(float(score))
+
+            if not doc_ids:
+                return np.array([], dtype=np.int64), np.array([], dtype=np.float32)
+
+            raw_scores_np = np.asarray(raw_scores, dtype=np.float32)
+            if getattr(self.global_config, "milvus_metric_type", "IP") == "L2":
+                # Convert distance to similarity.
+                raw_scores_np = -raw_scores_np
+
+            order = np.argsort(raw_scores_np)[::-1]
+            sorted_doc_ids = np.asarray([doc_ids[i] for i in order], dtype=np.int64)
+            sorted_doc_scores = min_max_normalize(raw_scores_np[order])
+            return sorted_doc_ids, sorted_doc_scores
+
+        # Default dense retrieval (in-memory dot product)
         query_doc_scores = np.dot(self.passage_embeddings, query_embedding.T)
         query_doc_scores = (
             np.squeeze(query_doc_scores)
@@ -2022,15 +2137,22 @@ class HippoRAG:
                     phrase_weights[phrase_id] += weighted_fact_score
                     number_of_occurs[phrase_id] += 1
 
-                phrases_and_ids.add((phrase, phrase_id))
+                if phrase_id is not None:
+                    phrases_and_ids.add((phrase, phrase_id))
 
-        phrase_weights /= number_of_occurs
+        # Avoid divide-by-zero and NaNs when no phrase nodes were matched.
+        phrase_weights = np.divide(
+            phrase_weights,
+            number_of_occurs,
+            out=np.zeros_like(phrase_weights),
+            where=number_of_occurs != 0,
+        )
 
         for phrase, phrase_id in phrases_and_ids:
             if phrase not in phrase_scores:
                 phrase_scores[phrase] = []
 
-            phrase_scores[phrase].append(phrase_weights[phrase_id])
+            phrase_scores[phrase].append(float(phrase_weights[phrase_id]))
 
         # calculate average fact score for each phrase
         for phrase, scores in phrase_scores.items():
@@ -2043,18 +2165,25 @@ class HippoRAG:
 
         # Get passage scores according to chosen dense retrieval model
         dpr_sorted_doc_ids, dpr_sorted_doc_scores = self.dense_passage_retrieval(query)
-        normalized_dpr_sorted_scores = min_max_normalize(dpr_sorted_doc_scores)
+        if dpr_sorted_doc_scores is not None and np.asarray(dpr_sorted_doc_scores).size > 0:
+            normalized_dpr_sorted_scores = min_max_normalize(dpr_sorted_doc_scores)
 
-        for i, dpr_sorted_doc_id in enumerate(dpr_sorted_doc_ids.tolist()):
-            passage_node_key = self.passage_node_keys[dpr_sorted_doc_id]
-            passage_dpr_score = normalized_dpr_sorted_scores[i]
-            passage_node_id = self.node_name_to_vertex_idx[passage_node_key]
-            passage_weights[passage_node_id] = passage_dpr_score * passage_node_weight
-            passage_node_text = self.chunk_embedding_store.get_row(passage_node_key)[
-                "content"
-            ]
-            linking_score_map[passage_node_text] = (
-                passage_dpr_score * passage_node_weight
+            for i, dpr_sorted_doc_id in enumerate(dpr_sorted_doc_ids.tolist()):
+                passage_node_key = self.passage_node_keys[dpr_sorted_doc_id]
+                passage_dpr_score = float(normalized_dpr_sorted_scores[i])
+                passage_node_id = self.node_name_to_vertex_idx[passage_node_key]
+                passage_weights[passage_node_id] = (
+                    passage_dpr_score * passage_node_weight
+                )
+                passage_node_text = self.chunk_embedding_store.get_row(passage_node_key)[
+                    "content"
+                ]
+                linking_score_map[passage_node_text] = (
+                    passage_dpr_score * passage_node_weight
+                )
+        else:
+            logger.warning(
+                "Dense passage retrieval returned no results; skipping passage weights"
             )
 
         # Combining phrase and passage scores into one array for PPR

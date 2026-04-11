@@ -123,6 +123,13 @@ def flatten_facts(chunk_triples: List[Triple]) -> List[Triple]:
 
 
 def min_max_normalize(x):
+    # Accept empty inputs (common when a retrieval backend returns no hits).
+    if x is None:
+        return x
+    x = np.asarray(x)
+    if x.size == 0:
+        return x
+
     min_val = np.min(x)
     max_val = np.max(x)
     range_val = max_val - min_val

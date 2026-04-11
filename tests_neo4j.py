@@ -32,6 +32,7 @@ def main():
 
     cfg = BaseConfig(
         kb_backend="neo4j",
+        chunk_vector_backend=os.getenv("HIPPORAG_CHUNK_VECTOR_BACKEND", "default"),
         save_dir="outputs/neo4j_test",
         llm_name=os.getenv("HIPPORAG_LLM_NAME", "gpt-4o-mini"),
         llm_base_url=os.getenv("HIPPORAG_LLM_BASE_URL", "http://localhost:4000/v1"),
@@ -41,6 +42,8 @@ def main():
         embedding_base_url=os.getenv(
             "HIPPORAG_EMBEDDING_BASE_URL", "http://localhost:4000/v1"
         ),
+        milvus_uri=os.getenv("MILVUS_URI"),
+        milvus_token=os.getenv("MILVUS_TOKEN"),
         neo4j_uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
         neo4j_user=os.getenv("NEO4J_USER", "neo4j"),
         neo4j_password=password,

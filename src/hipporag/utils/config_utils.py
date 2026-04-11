@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass, field
-from typing import Literal, Union, Optional
+from typing import Literal, Union, Optional, Any
 
 from .logging_utils import get_logger
 
@@ -69,6 +69,16 @@ class BaseConfig:
         },
     )
 
+    # Chunk vector backend (where passage vectors are stored/searched)
+    # - default behavior: vectors are stored alongside the KB backend (parquet or Neo4j)
+    # - optional: use Milvus for scalable similarity search of chunk/passage vectors
+    chunk_vector_backend: Literal["default", "milvus"] = field(
+        default="default",
+        metadata={
+            "help": "Backend for chunk/passage vectors. 'default' uses the KB backend (parquet/neo4j). 'milvus' stores/searches chunk vectors in Milvus (typically with kb_backend='neo4j')."
+        },
+    )
+
     # Neo4j KB backend specific attributes
     neo4j_uri: str = field(
         default="bolt://localhost:7687",
@@ -97,6 +107,50 @@ class BaseConfig:
     neo4j_batch_size: int = field(
         default=500,
         metadata={"help": "Batch size for Neo4j UNWIND writes/reads."},
+    )
+
+    # Milvus (vector DB) settings (used when chunk_vector_backend='milvus')
+    milvus_uri: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Milvus URI for pymilvus connections, e.g. 'http://localhost:19530' or 'tcp://localhost:19530'."
+        },
+    )
+    milvus_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Optional Milvus/Zilliz token (if required). Leave None for local Milvus."
+        },
+    )
+    milvus_collection_prefix: str = field(
+        default="hipporag",
+        metadata={
+            "help": "Prefix for Milvus collection names. Actual collection names also include Neo4j namespace + llm + embedding labels."
+        },
+    )
+    milvus_metric_type: Literal["IP", "COSINE", "L2"] = field(
+        default="IP",
+        metadata={
+            "help": "Milvus metric type. If using IP, embeddings should be normalized to approximate cosine similarity."
+        },
+    )
+    milvus_index_type: Literal["HNSW", "IVF_FLAT", "AUTOINDEX"] = field(
+        default="HNSW",
+        metadata={"help": "Milvus index type for chunk vectors."},
+    )
+    milvus_index_params: Optional[dict[str, Any]] = field(
+        default_factory=lambda: {"M": 16, "efConstruction": 200},
+        metadata={"help": "Index build params for Milvus (depends on index type)."},
+    )
+    milvus_search_params: Optional[dict[str, Any]] = field(
+        default_factory=lambda: {"ef": 128},
+        metadata={"help": "Search params for Milvus (depends on index type)."},
+    )
+    milvus_dense_top_k: int = field(
+        default=200,
+        metadata={
+            "help": "Top-k passages to fetch from Milvus for dense retrieval and PPR passage weighting (should be >= retrieval_top_k)."
+        },
     )
 
     # Storage specific attributes
