@@ -131,7 +131,7 @@ class Neo4jKB:
     def load_all_nodes(self, label: str) -> Tuple[List[str], List[str], List[List[float]]]:
         query = (
             f"MATCH (n:{label} {{ns: $ns}}) "
-            "RETURN n.id AS id, n.content AS content, n.embedding AS embedding"
+            "RETURN n.id AS id, n['content'] AS content, n['embedding'] AS embedding"
         )
         ids: List[str] = []
         contents: List[str] = []
@@ -150,7 +150,7 @@ class Neo4jKB:
         query = (
             f"UNWIND $ids AS id\n"
             f"MATCH (n:{label} {{ns: $ns, id: id}})\n"
-            "RETURN n.id AS id, n.content AS content"
+            "RETURN n.id AS id, n['content'] AS content"
         )
         out: Dict[str, Dict[str, Any]] = {}
         with self.driver.session(database=self.cfg.database) as session:
@@ -195,16 +195,37 @@ class Neo4jKB:
         if chunk_ids is None:
             query = (
                 f"MATCH (c:{self.CHUNK_LABEL} {{ns: $ns}}) "
-                "RETURN c.id AS id, c.content AS passage, c.openie_entities AS ents, c.openie_triples AS triples, exists(c.openie_triples) AS has_openie"
+                "WITH c "
+                "RETURN c.id AS id, "
+                "c[$content_key] AS passage, "
+                "CASE WHEN $ents_key IN keys(c) THEN c[$ents_key] ELSE [] END AS ents, "
+                "CASE WHEN $triples_key IN keys(c) THEN c[$triples_key] ELSE [] END AS triples, "
+                "$triples_key IN keys(c) AS has_openie"
             )
-            params = {"ns": self.cfg.namespace}
+            params = {
+                "ns": self.cfg.namespace,
+                "content_key": "content",
+                "ents_key": "openie_entities",
+                "triples_key": "openie_triples",
+            }
         else:
             query = (
                 "UNWIND $ids AS id\n"
                 f"MATCH (c:{self.CHUNK_LABEL} {{ns: $ns, id: id}})\n"
-                "RETURN c.id AS id, c.content AS passage, c.openie_entities AS ents, c.openie_triples AS triples, exists(c.openie_triples) AS has_openie"
+                "WITH c "
+                "RETURN c.id AS id, "
+                "c[$content_key] AS passage, "
+                "CASE WHEN $ents_key IN keys(c) THEN c[$ents_key] ELSE [] END AS ents, "
+                "CASE WHEN $triples_key IN keys(c) THEN c[$triples_key] ELSE [] END AS triples, "
+                "$triples_key IN keys(c) AS has_openie"
             )
-            params = {"ns": self.cfg.namespace, "ids": chunk_ids}
+            params = {
+                "ns": self.cfg.namespace,
+                "ids": chunk_ids,
+                "content_key": "content",
+                "ents_key": "openie_entities",
+                "triples_key": "openie_triples",
+            }
 
         docs: List[Dict[str, Any]] = []
         with self.driver.session(database=self.cfg.database) as session:

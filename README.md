@@ -107,8 +107,17 @@ rag_results = hipporag.rag_qa(queries=queries)
 By default, HippoRAG persists its KB locally (Parquet embeddings + `graph.pickle` + OpenIE JSON). You can switch persistence to Neo4j for both indexing and inference by setting `kb_backend="neo4j"` in `BaseConfig`.
 
 Prereqs:
-- Neo4j 5.x running (e.g., local Docker) and reachable at `neo4j_uri`.
+- Neo4j 5.26.24 running (for example, via local Docker) and reachable at `neo4j_uri`.
 - Set `NEO4J_PASSWORD` (or pass `neo4j_password` in config).
+
+If you are starting Neo4j with Docker, use the 5.26.24 image:
+
+```bash
+docker run --name neo4j-hipporag \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/<your_password> \
+  neo4j:5.26.24
+```
 
 Example:
 
