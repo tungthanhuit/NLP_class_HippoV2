@@ -1,7 +1,7 @@
 from argparse import ArgumentTypeError
 from dataclasses import dataclass
 from hashlib import md5
-from typing import Dict, Any, List, Literal, Optional
+from typing import Dict, Any, List, Literal, Optional, Tuple
 import numpy as np
 import re
 import logging
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class NerRawOutput:
     chunk_id: str
-    response: str
+    response: Optional[str]
     unique_entities: List[str]
     metadata: Dict[str, Any]
 
@@ -23,7 +23,7 @@ class NerRawOutput:
 @dataclass
 class TripleRawOutput:
     chunk_id: str
-    response: str
+    response: Optional[str]
     triples: List[List[str]]
     metadata: Dict[str, Any]
 
@@ -38,9 +38,9 @@ class LinkingOutput:
 class QuerySolution:
     question: str
     docs: List[str]
-    doc_scores: np.ndarray = None
-    answer: str = None
-    gold_answers: List[str] = None
+    doc_scores: Optional[np.ndarray] = None
+    answer: Optional[str] = None
+    gold_answers: Optional[List[str]] = None
     gold_docs: Optional[List[str]] = None
 
     def to_dict(self):
@@ -68,8 +68,7 @@ def text_processing(text):
 
 def reformat_openie_results(
     corpus_openie_results,
-) -> (Dict[str, NerRawOutput], Dict[str, TripleRawOutput]):
-
+) -> Tuple[Dict[str, NerRawOutput], Dict[str, TripleRawOutput]]:
     ner_output_dict = {
         chunk_item["idx"]: NerRawOutput(
             chunk_id=chunk_item["idx"],
@@ -94,7 +93,7 @@ def reformat_openie_results(
 
 def extract_entity_nodes(
     chunk_triples: List[List[Triple]],
-) -> (List[str], List[List[str]]):
+) -> Tuple[List[str], List[List[str]]]:
     chunk_triple_entities = (
         []
     )  # a list of lists of unique entities from each chunk's triples

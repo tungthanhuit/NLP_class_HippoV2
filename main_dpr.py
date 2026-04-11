@@ -1,5 +1,4 @@
 import os
-from typing import List
 import json
 
 from src.hipporag.StandardRAG import StandardRAG
@@ -8,14 +7,14 @@ from src.hipporag.utils.config_utils import BaseConfig
 
 import argparse
 
-# os.environ["LOG_LEVEL"] = "DEBUG"
+os.environ["LOG_LEVEL"] = "DEBUG"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import logging
 
 
-def get_gold_docs(samples: List, dataset_name: str = None) -> List:
+def get_gold_docs(samples: list, dataset_name: str | None = None) -> list:
     gold_docs = []
     for sample in samples:
         if "supporting_facts" in sample:  # hotpotqa, 2wikimultihopqa
@@ -23,7 +22,7 @@ def get_gold_docs(samples: List, dataset_name: str = None) -> List:
             gold_title_and_content_list = [
                 item for item in sample["context"] if item[0] in gold_title
             ]
-            if dataset_name.startswith("hotpotqa"):
+            if dataset_name and dataset_name.startswith("hotpotqa"):
                 gold_doc = [
                     item[0] + "\n" + "".join(item[1])
                     for item in gold_title_and_content_list
@@ -158,7 +157,7 @@ def main():
         assert (
             len(all_queries) == len(gold_docs) == len(gold_answers)
         ), "Length of queries, gold_docs, and gold_answers should be the same."
-    except:
+    except Exception:
         gold_docs = None
 
     config = BaseConfig(

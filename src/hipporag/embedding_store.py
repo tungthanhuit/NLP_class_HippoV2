@@ -167,7 +167,7 @@ class EmbeddingStore:
         self.hash_ids.extend(hash_ids)
         self.texts.extend(texts)
 
-        logger.info(f"Saving new records.")
+        logger.info("Saving new records.")
         self._save_data()
 
     def delete(self, hash_ids):
@@ -183,7 +183,7 @@ class EmbeddingStore:
             self.texts.pop(idx)
             self.embeddings.pop(idx)
 
-        logger.info(f"Saving record after deletion.")
+        logger.info("Saving record after deletion.")
         self._save_data()
 
     def get_row(self, hash_id):
@@ -192,7 +192,7 @@ class EmbeddingStore:
     def get_hash_id(self, text):
         return self.text_to_hash_id[text]
 
-    def get_rows(self, hash_ids, dtype=np.float32):
+    def get_rows(self, hash_ids):
         if not hash_ids:
             return {}
 
@@ -207,10 +207,10 @@ class EmbeddingStore:
         return deepcopy(self.hash_id_to_row)
 
     def get_all_texts(self):
-        return set(row["content"] for row in self.hash_id_to_row.values())
+        return {row["content"] for row in self.hash_id_to_row.values()}
 
     def get_embedding(self, hash_id, dtype=np.float32) -> np.ndarray:
-        return self.embeddings[self.hash_id_to_idx[hash_id]].astype(dtype)
+        return np.asarray(self.embeddings[self.hash_id_to_idx[hash_id]], dtype=dtype)
 
     def get_embeddings(self, hash_ids, dtype=np.float32) -> list[np.ndarray]:
         if not hash_ids:
@@ -219,4 +219,4 @@ class EmbeddingStore:
         indices = np.array([self.hash_id_to_idx[h] for h in hash_ids], dtype=np.intp)
         embeddings = np.array(self.embeddings, dtype=dtype)[indices]
 
-        return embeddings
+        return embeddings.tolist()

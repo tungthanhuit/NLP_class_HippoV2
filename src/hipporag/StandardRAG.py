@@ -4,7 +4,6 @@ from dataclasses import asdict
 from typing import List, Dict, Tuple
 import numpy as np
 from tqdm import tqdm
-import numpy as np
 import time
 
 from .llm import _get_llm_class, BaseLLM
@@ -102,7 +101,7 @@ class StandardRAG:
                 A list of documents to be indexed.
         """
 
-        logger.info(f"Indexing Documents")
+        logger.info("Indexing Documents")
 
         self.chunk_embedding_store.insert_strings(docs)
 

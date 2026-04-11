@@ -56,7 +56,7 @@ def reason_step(
     try:
         response_message, metadata = llm_client.infer(messages=messages)
         response_content = response_message[0]["content"]
-    except Exception as e:
+    except Exception:
         logger.exception("An exception occurred while calling LLM for QA!")
         return ""
 

@@ -1,5 +1,4 @@
 import os
-from typing import List
 import json
 
 from src.hipporag.HippoRAG import HippoRAG
@@ -15,7 +14,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import logging
 
 
-def get_gold_docs(samples: List, dataset_name: str | None = None) -> List:
+def get_gold_docs(samples: list, dataset_name: str | None = None) -> list:
     gold_docs = []
     for sample in samples:
         if "supporting_facts" in sample:  # hotpotqa, 2wikimultihopqa
@@ -40,9 +39,9 @@ def get_gold_docs(samples: List, dataset_name: str | None = None) -> List:
                 if item["is_supporting"]
             ]
         else:
-            assert (
-                "paragraphs" in sample
-            ), "`paragraphs` should be in sample, or consider the setting not to evaluate retrieval"
+            assert "paragraphs" in sample, (
+                "`paragraphs` should be in sample, or consider the setting not to evaluate retrieval"
+            )
             gold_paragraphs = []
             for item in sample["paragraphs"]:
                 if "is_supporting" in item and item["is_supporting"] is False:
@@ -155,10 +154,10 @@ def main():
     gold_answers = get_gold_answers(samples)
     try:
         gold_docs = get_gold_docs(samples, dataset_name)
-        assert (
-            len(all_queries) == len(gold_docs) == len(gold_answers)
-        ), "Length of queries, gold_docs, and gold_answers should be the same."
-    except:
+        assert len(all_queries) == len(gold_docs) == len(gold_answers), (
+            "Length of queries, gold_docs, and gold_answers should be the same."
+        )
+    except Exception:
         gold_docs = None
 
     config = BaseConfig(

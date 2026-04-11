@@ -1,34 +1,43 @@
 import json
-import os
 import logging
-from dataclasses import asdict
-from typing import List, Set, Dict, Tuple
-import numpy as np
-from collections import defaultdict
-from tqdm import tqdm
-import igraph as ig
+import os
 import re
 import time
+from collections import defaultdict
+from dataclasses import asdict
+from typing import Dict, List, Optional, Set, Tuple
 
-from .llm import _get_llm_class, BaseLLM
-from .embedding_model import _get_embedding_model_class, BaseEmbeddingModel
+import igraph as ig
+import numpy as np
+from tqdm import tqdm
+
+from .embedding_model import BaseEmbeddingModel, _get_embedding_model_class
 from .embedding_store import EmbeddingStore
-from .information_extraction import OpenIE
-from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
+from .evaluation.retrieval_eval import RetrievalRecall
+from .information_extraction import OpenIE
+from .llm import BaseLLM, _get_llm_class
 from .prompts.linking import get_query_instruction
 from .prompts.prompt_template_manager import PromptTemplateManager
 from .rerank import DSPyFilter
-from .utils.misc_utils import *
-from .utils.misc_utils import NerRawOutput, TripleRawOutput
-from .utils.embed_utils import retrieve_knn
 from .utils.config_utils import BaseConfig
+from .utils.embed_utils import retrieve_knn
+from .utils.misc_utils import (
+    NerRawOutput,
+    QuerySolution,
+    TripleRawOutput,
+    compute_mdhash_id,
+    extract_entity_nodes,
+    flatten_facts,
+    min_max_normalize,
+    reformat_openie_results,
+    text_processing,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class HippoRAG:
-
     def __init__(
         self,
         global_config=None,
@@ -157,7 +166,7 @@ class HippoRAG:
 
         self.openie_results_path = os.path.join(
             self.global_config.save_dir,
-            f'openie_results_ner_{self.global_config.llm_name.replace("/", "_")}.json',
+            f"openie_results_ner_{self.global_config.llm_name.replace('/', '_')}.json",
         )
 
         self.rerank_filter = DSPyFilter(self)
@@ -185,7 +194,7 @@ class HippoRAG:
         Raises:
             None
         """
-        self._graph_pickle_filename = os.path.join(self.working_dir, f"graph.pickle")
+        self._graph_pickle_filename = os.path.join(self.working_dir, "graph.pickle")
 
         preloaded_graph = None
 
@@ -211,9 +220,9 @@ class HippoRAG:
                 A list of documents to be indexed.
         """
 
-        logger.info(f"Indexing Documents")
+        logger.info("Indexing Documents")
 
-        logger.info(f"Performing OpenIE")
+        logger.info("Performing OpenIE")
 
         self.chunk_embedding_store.insert_strings(docs)
         chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
@@ -241,7 +250,9 @@ class HippoRAG:
 
         assert (
             len(chunk_to_rows) == len(ner_results_dict) == len(triple_results_dict)
-        ), f"len(chunk_to_rows): {len(chunk_to_rows)}, len(ner_results_dict): {len(ner_results_dict)}, len(triple_results_dict): {len(triple_results_dict)}"
+        ), (
+            f"len(chunk_to_rows): {len(chunk_to_rows)}, len(ner_results_dict): {len(ner_results_dict)}, len(triple_results_dict): {len(triple_results_dict)}"
+        )
 
         # prepare data_store
         chunk_ids = list(chunk_to_rows.keys())
@@ -253,13 +264,13 @@ class HippoRAG:
         entity_nodes, chunk_triple_entities = extract_entity_nodes(chunk_triples)
         facts = flatten_facts(chunk_triples)
 
-        logger.info(f"Encoding Entities")
+        logger.info("Encoding Entities")
         self.entity_embedding_store.insert_strings(entity_nodes)
 
-        logger.info(f"Encoding Facts")
+        logger.info("Encoding Facts")
         self.fact_embedding_store.insert_strings([str(fact) for fact in facts])
 
-        logger.info(f"Constructing Graph")
+        logger.info("Constructing Graph")
 
         self.node_to_node_stats = {}
         self.ent_node_to_chunk_ids = {}
@@ -300,7 +311,7 @@ class HippoRAG:
         )
 
         # Find triples in chunks to delete
-        all_openie_info, chunk_keys_to_process = self.load_existing_openie([])
+        all_openie_info, _ = self.load_existing_openie([])
         triples_to_delete = []
 
         all_openie_info_with_deletes = []
@@ -378,8 +389,8 @@ class HippoRAG:
     def retrieve(
         self,
         queries: List[str],
-        num_to_retrieve: int = None,
-        gold_docs: List[List[str]] = None,
+        num_to_retrieve: Optional[int] = None,
+        gold_docs: Optional[List[List[str]]] = None,
     ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
         """
         Performs retrieval using the HippoRAG 2 framework, which consists of several steps:
@@ -430,7 +441,7 @@ class HippoRAG:
         ):
             rerank_start = time.time()
             query_fact_scores = self.get_fact_scores(query)
-            top_k_fact_indices, top_k_facts, rerank_log = self.rerank_facts(
+            top_k_fact_indices, top_k_facts, _ = self.rerank_facts(
                 query, query_fact_scores
             )
             rerank_end = time.time()
@@ -481,7 +492,7 @@ class HippoRAG:
         # Evaluate retrieval
         if gold_docs is not None:
             k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
-            overall_retrieval_result, example_retrieval_results = (
+            overall_retrieval_result, _ = (
                 retrieval_recall_evaluator.calculate_metric_scores(
                     gold_docs=gold_docs,
                     retrieved_docs=[
@@ -499,8 +510,8 @@ class HippoRAG:
     def rag_qa(
         self,
         queries: List[str | QuerySolution],
-        gold_docs: List[List[str]] | None = None,
-        gold_answers: List[List[str]] | None = None,
+        gold_docs: Optional[List[List[str]]] = None,
+        gold_answers: Optional[List[List[str]]] = None,
     ) -> (
         Tuple[List[QuerySolution], List[str], List[Dict]]
         | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]
@@ -554,23 +565,15 @@ class HippoRAG:
 
         # Evaluating QA
         if gold_answers is not None:
-            overall_qa_em_result, example_qa_em_results = (
-                qa_em_evaluator.calculate_metric_scores(
-                    gold_answers=gold_answers,
-                    predicted_answers=[
-                        qa_result.answer for qa_result in queries_solutions
-                    ],
-                    aggregation_fn=np.max,
-                )
+            overall_qa_em_result, _ = qa_em_evaluator.calculate_metric_scores(
+                gold_answers=gold_answers,
+                predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+                aggregation_fn=np.max,
             )
-            overall_qa_f1_result, example_qa_f1_results = (
-                qa_f1_evaluator.calculate_metric_scores(
-                    gold_answers=gold_answers,
-                    predicted_answers=[
-                        qa_result.answer for qa_result in queries_solutions
-                    ],
-                    aggregation_fn=np.max,
-                )
+            overall_qa_f1_result, _ = qa_f1_evaluator.calculate_metric_scores(
+                gold_answers=gold_answers,
+                predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+                aggregation_fn=np.max,
             )
 
             # round off to 4 decimal places for QA results
@@ -600,8 +603,8 @@ class HippoRAG:
     def retrieve_dpr(
         self,
         queries: List[str],
-        num_to_retrieve: int = None,
-        gold_docs: List[List[str]] = None,
+        num_to_retrieve: Optional[int] = None,
+        gold_docs: Optional[List[List[str]]] = None,
     ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
         """
         Performs retrieval using a DPR framework, which consists of several steps:
@@ -674,7 +677,7 @@ class HippoRAG:
         # Evaluate retrieval
         if gold_docs is not None:
             k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
-            overall_retrieval_result, example_retrieval_results = (
+            overall_retrieval_result, _ = (
                 retrieval_recall_evaluator.calculate_metric_scores(
                     gold_docs=gold_docs,
                     retrieved_docs=[
@@ -692,8 +695,8 @@ class HippoRAG:
     def rag_qa_dpr(
         self,
         queries: List[str | QuerySolution],
-        gold_docs: List[List[str]] = None,
-        gold_answers: List[List[str]] = None,
+        gold_docs: Optional[List[List[str]]] = None,
+        gold_answers: Optional[List[List[str]]] = None,
     ) -> (
         Tuple[List[QuerySolution], List[str], List[Dict]]
         | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]
@@ -747,23 +750,15 @@ class HippoRAG:
 
         # Evaluating QA
         if gold_answers is not None:
-            overall_qa_em_result, example_qa_em_results = (
-                qa_em_evaluator.calculate_metric_scores(
-                    gold_answers=gold_answers,
-                    predicted_answers=[
-                        qa_result.answer for qa_result in queries_solutions
-                    ],
-                    aggregation_fn=np.max,
-                )
+            overall_qa_em_result, _ = qa_em_evaluator.calculate_metric_scores(
+                gold_answers=gold_answers,
+                predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+                aggregation_fn=np.max,
             )
-            overall_qa_f1_result, example_qa_f1_results = (
-                qa_f1_evaluator.calculate_metric_scores(
-                    gold_answers=gold_answers,
-                    predicted_answers=[
-                        qa_result.answer for qa_result in queries_solutions
-                    ],
-                    aggregation_fn=np.max,
-                )
+            overall_qa_f1_result, _ = qa_f1_evaluator.calculate_metric_scores(
+                gold_answers=gold_answers,
+                predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+                aggregation_fn=np.max,
             )
 
             # round off to 4 decimal places for QA results
@@ -811,7 +806,6 @@ class HippoRAG:
         all_qa_messages = []
 
         for query_solution in tqdm(queries, desc="Collecting QA prompts"):
-
             # obtain the retrieved docs
             retrieved_passages = query_solution.docs[: self.global_config.qa_top_k]
 
@@ -842,9 +836,10 @@ class HippoRAG:
             for qa_messages in tqdm(all_qa_messages, desc="QA Reading")
         ]
 
-        all_response_message, all_metadata, all_cache_hit = zip(*all_qa_results)
-        all_response_message, all_metadata = list(all_response_message), list(
-            all_metadata
+        all_response_message, all_metadata, _ = zip(*all_qa_results)
+        all_response_message, all_metadata = (
+            list(all_response_message),
+            list(all_metadata),
         )
 
         # Process responses and extract predicted answers.
@@ -891,7 +886,7 @@ class HippoRAG:
         else:
             current_graph_nodes = set()
 
-        logger.info(f"Adding OpenIE triples to graph.")
+        logger.info("Adding OpenIE triples to graph.")
 
         for chunk_key, triples in tqdm(zip(chunk_ids, chunk_triples)):
             entities_in_chunk = set()
@@ -952,10 +947,9 @@ class HippoRAG:
 
         num_new_chunks = 0
 
-        logger.info(f"Connecting passage nodes to phrase nodes.")
+        logger.info("Connecting passage nodes to phrase nodes.")
 
         for idx, chunk_key in tqdm(enumerate(chunk_ids)):
-
             if chunk_key not in current_graph_nodes:
                 for chunk_ent in chunk_triple_entities[idx]:
                     node_key = compute_mdhash_id(chunk_ent, prefix="entity-")
@@ -983,7 +977,7 @@ class HippoRAG:
             node_to_node_stats: dict. Stores scores for edges between nodes representing their relationship.
 
         """
-        logger.info(f"Expanding graph with synonymy edges")
+        logger.info("Expanding graph with synonymy edges")
 
         self.entity_id_to_row = self.entity_embedding_store.get_all_id_to_rows()
         entity_node_keys = list(self.entity_id_to_row.keys())
@@ -1006,9 +1000,7 @@ class HippoRAG:
         )
 
         num_synonym_triple = 0
-        synonym_candidates = (
-            []
-        )  # [(node key, [(synonym node key, corresponding score), ...]), ...]
+        synonym_candidates = []  # [(node key, [(synonym node key, corresponding score), ...]), ...]
 
         for node_key in tqdm(
             query_node_key2knn_node_keys.keys(), total=len(query_node_key2knn_node_keys)
@@ -1199,7 +1191,7 @@ class HippoRAG:
         self.add_new_nodes()
         self.add_new_edges()
 
-        logger.info(f"Graph construction completed!")
+        logger.info("Graph construction completed!")
         print(self.get_graph_info())
 
     def add_new_nodes(self):
@@ -1280,7 +1272,7 @@ class HippoRAG:
             f"Writing graph with {len(self.graph.vs())} nodes, {len(self.graph.es())} edges"
         )
         self.graph.write_pickle(self._graph_pickle_filename)
-        logger.info(f"Saving graph completed!")
+        logger.info("Saving graph completed!")
 
     def get_graph_info(self) -> Dict:
         """
@@ -1435,7 +1427,7 @@ class HippoRAG:
             self.fact_embedding_store.get_embeddings(self.fact_node_keys)
         )
 
-        all_openie_info, chunk_keys_to_process = self.load_existing_openie([])
+        all_openie_info, _ = self.load_existing_openie([])
 
         self.proc_triples_to_docs = {}
 
@@ -1709,12 +1701,8 @@ class HippoRAG:
         """
 
         # Assigning phrase weights based on selected facts from previous steps.
-        linking_score_map = (
-            {}
-        )  # from phrase to the average scores of the facts that contain the phrase
-        phrase_scores = (
-            {}
-        )  # store all fact scores for each phrase regardless of whether they exist in the knowledge graph or not
+        linking_score_map = {}  # from phrase to the average scores of the facts that contain the phrase
+        phrase_scores = {}  # store all fact scores for each phrase regardless of whether they exist in the knowledge graph or not
         phrase_weights = np.zeros(len(self.graph.vs["name"]))
         passage_weights = np.zeros(len(self.graph.vs["name"]))
         number_of_occurs = np.zeros(len(self.graph.vs["name"]))
@@ -1790,9 +1778,9 @@ class HippoRAG:
                 sorted(linking_score_map.items(), key=lambda x: x[1], reverse=True)[:30]
             )
 
-        assert (
-            sum(node_weights) > 0
-        ), f"No phrases found in the graph for the given facts: {top_k_facts}"
+        assert sum(node_weights) > 0, (
+            f"No phrases found in the graph for the given facts: {top_k_facts}"
+        )
 
         # Running PPR algorithm based on the passage and phrase weights previously assigned
         ppr_start = time.time()
@@ -1803,9 +1791,9 @@ class HippoRAG:
 
         self.ppr_time += ppr_end - ppr_start
 
-        assert len(ppr_sorted_doc_ids) == len(
-            self.passage_node_idxs
-        ), f"Doc prob length {len(ppr_sorted_doc_ids)} != corpus length {len(self.passage_node_idxs)}"
+        assert len(ppr_sorted_doc_ids) == len(self.passage_node_idxs), (
+            f"Doc prob length {len(ppr_sorted_doc_ids)} != corpus length {len(self.passage_node_idxs)}"
+        )
 
         return ppr_sorted_doc_ids, ppr_sorted_doc_scores
 
