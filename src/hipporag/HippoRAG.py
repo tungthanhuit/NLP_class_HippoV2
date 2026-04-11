@@ -380,6 +380,7 @@ class HippoRAG:
         queries: List[str],
         num_to_retrieve: int = None,
         gold_docs: List[List[str]] = None,
+        query_ids: List[str] = None,
     ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
         """
         Performs retrieval using the HippoRAG 2 framework, which consists of several steps:
@@ -463,6 +464,7 @@ class HippoRAG:
                 QuerySolution(
                     question=query,
                     docs=top_k_docs,
+                    id=query_ids[q_idx] if query_ids is not None else None,
                     doc_scores=sorted_doc_scores[:num_to_retrieve],
                 )
             )
@@ -501,6 +503,7 @@ class HippoRAG:
         queries: List[str | QuerySolution],
         gold_docs: List[List[str]] = None,
         gold_answers: List[List[str]] = None,
+        query_ids: List[str] = None,
     ) -> (
         Tuple[List[QuerySolution], List[str], List[Dict]]
         | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]
@@ -544,10 +547,10 @@ class HippoRAG:
         if not isinstance(queries[0], QuerySolution):
             if gold_docs is not None:
                 queries, overall_retrieval_result = self.retrieve(
-                    queries=queries, gold_docs=gold_docs
+                    queries=queries, gold_docs=gold_docs, query_ids=query_ids
                 )
             else:
-                queries = self.retrieve(queries=queries)
+                queries = self.retrieve(queries=queries, query_ids=query_ids)
 
         # Performing QA
         queries_solutions, all_response_message, all_metadata = self.qa(queries)
@@ -602,6 +605,7 @@ class HippoRAG:
         queries: List[str],
         num_to_retrieve: int = None,
         gold_docs: List[List[str]] = None,
+        query_ids: List[str] = None,
     ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
         """
         Performs retrieval using a DPR framework, which consists of several steps:
@@ -661,6 +665,7 @@ class HippoRAG:
                 QuerySolution(
                     question=query,
                     docs=top_k_docs,
+                    id=query_ids[q_idx] if query_ids is not None else None,
                     doc_scores=sorted_doc_scores[:num_to_retrieve],
                 )
             )

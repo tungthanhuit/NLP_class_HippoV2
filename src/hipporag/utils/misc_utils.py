@@ -38,6 +38,7 @@ class LinkingOutput:
 class QuerySolution:
     question: str
     docs: List[str]
+    id: str = None
     doc_scores: np.ndarray = None
     answer: str = None
     gold_answers: List[str] = None
@@ -45,6 +46,7 @@ class QuerySolution:
 
     def to_dict(self):
         return {
+            "id": self.id,
             "question": self.question,
             "answer": self.answer,
             "gold_answers": self.gold_answers,

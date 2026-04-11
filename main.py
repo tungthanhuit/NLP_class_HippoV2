@@ -151,6 +151,7 @@ def main():
     # Prepare datasets and evaluation
     samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
     all_queries = [s["question"] for s in samples]
+    all_query_ids = [str(s.get("id", s.get("_id", idx))) for idx, s in enumerate(samples)]
 
     gold_answers = get_gold_answers(samples)
     try:
@@ -188,7 +189,7 @@ def main():
     hipporag.index(docs)
 
     # Retrieval and QA
-    hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers)
+    hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers, query_ids=all_query_ids)
 
 
 if __name__ == "__main__":
