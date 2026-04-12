@@ -1,4 +1,8 @@
+import os
+
 from src.hipporag import HippoRAG
+from src.hipporag.utils.config_utils import BaseConfig
+from src.hipporag.utils.misc_utils import string_to_bool
 
 
 def main():
@@ -17,18 +21,26 @@ def main():
     ]
 
     save_dir = "outputs/demo_llama"  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
-    llm_model_name = "meta-llama/Llama-3.1-8B-Instruct"  # Any OpenAI model name
-    embedding_model_name = (
-        "Transformers/sentence-transformers/all-MiniLM-L6-v2"  # Embedding model name
+    llm_base_url = os.getenv("HIPPORAG_LLM_BASE_URL", "http://localhost:6578/v1")
+    embedding_trust_remote_code = string_to_bool(
+        os.getenv("HIPPORAG_EMBEDDING_TRUST_REMOTE_CODE", "false")
+    )
+
+    cfg = BaseConfig(
+        save_dir=save_dir,
+        llm_name=os.getenv(
+            "HIPPORAG_LLM_NAME", "meta-llama/Llama-3.1-8B-Instruct"
+        ),
+        llm_base_url=llm_base_url,
+        embedding_model_name=os.getenv(
+            "HIPPORAG_EMBEDDING_MODEL_NAME",
+            "Transformers/sentence-transformers/all-MiniLM-L6-v2",
+        ),
+        embedding_trust_remote_code=embedding_trust_remote_code,
     )
 
     # Startup a HippoRAG instance
-    hipporag = HippoRAG(
-        save_dir=save_dir,
-        llm_model_name=llm_model_name,
-        embedding_model_name=embedding_model_name,
-        llm_base_url="http://localhost:6578/v1",
-    )
+    hipporag = HippoRAG(global_config=cfg)
 
     # Run indexing
     hipporag.index(docs=docs)

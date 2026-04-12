@@ -12,7 +12,8 @@ def _print_qa_round(round_name, query_solutions):
 
 
 def main():
-    password = os.getenv("NEO4J_PASSWORD", "password")
+    password = os.getenv("NEO4J_PASSWORD")
+    print("Running Neo4j test with NEO4J_PASSWORD set:", bool(password))
     if not password:
         print("Skipping Neo4j test: env NEO4J_PASSWORD not set")
         return
@@ -30,9 +31,13 @@ def main():
         "Montebello is a part of Rockland County.",
     ]
 
+    chunk_vector_backend = os.getenv("HIPPORAG_CHUNK_VECTOR_BACKEND", "default")
+    if chunk_vector_backend not in ("default", "milvus"):
+        chunk_vector_backend = "default"
+
     cfg = BaseConfig(
         kb_backend="neo4j",
-        chunk_vector_backend=os.getenv("HIPPORAG_CHUNK_VECTOR_BACKEND", "default"),
+        chunk_vector_backend=chunk_vector_backend,  # type: ignore[arg-type]
         save_dir="outputs/neo4j_test",
         llm_name=os.getenv("HIPPORAG_LLM_NAME", "gpt-4o-mini"),
         llm_base_url=os.getenv("HIPPORAG_LLM_BASE_URL", "http://localhost:4000/v1"),
@@ -77,7 +82,7 @@ def main():
         ],
     ]
 
-    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)  # type: ignore[arg-type]
     query_solutions = result[0]
     overall_retrieval_result = result[3] if len(result) > 3 else None
     overall_qa_results = result[4] if len(result) > 4 else None
@@ -88,7 +93,7 @@ def main():
     print("First round.")
 
     hipporag = HippoRAG(global_config=cfg)
-    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)  # type: ignore[arg-type]
     query_solutions = result[0]
     overall_retrieval_result = result[3] if len(result) > 3 else None
     overall_qa_results = result[4] if len(result) > 4 else None
@@ -109,7 +114,7 @@ def main():
 
     hipporag.index(docs=new_docs)
 
-    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)  # type: ignore[arg-type]
     query_solutions = result[0]
     overall_retrieval_result = result[3] if len(result) > 3 else None
     overall_qa_results = result[4] if len(result) > 4 else None
@@ -129,7 +134,7 @@ def main():
 
     hipporag.delete(docs_to_delete)
 
-    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
+    result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)  # type: ignore[arg-type]
     query_solutions = result[0]
     overall_retrieval_result = result[3] if len(result) > 3 else None
     overall_qa_results = result[4] if len(result) > 4 else None

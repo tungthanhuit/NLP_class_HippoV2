@@ -4,6 +4,56 @@ from typing import Literal, Union, Optional, Any
 
 from .logging_utils import get_logger
 
+
+def _load_dotenv_if_present() -> None:
+    """Load environment variables from a local .env file (if available).
+
+    This is a convenience for local development/tests so users don't need to
+    export a long list of variables.
+
+    Opt-out by setting env `HIPPORAG_DISABLE_DOTENV=1`.
+    Override the path via env `HIPPORAG_DOTENV_PATH=/path/to/.env`.
+    """
+
+    if (os.getenv("HIPPORAG_DISABLE_DOTENV") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return
+
+    dotenv_path = (os.getenv("HIPPORAG_DOTENV_PATH") or "").strip() or None
+
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except Exception:
+        return
+
+    try:
+        if dotenv_path is not None:
+            load_dotenv(dotenv_path, override=False)
+            # Normalize common misconfigurations (e.g., OPENAI_API_KEY="")
+            # so downstream SDKs don't construct invalid headers.
+            _key = os.getenv("OPENAI_API_KEY")
+            if _key is not None and _key.strip() == "":
+                os.environ.pop("OPENAI_API_KEY", None)
+            return
+
+        # First try from the current working directory (common when running scripts).
+        # If that fails, fall back to searching relative to the calling file/module.
+        discovered = find_dotenv(usecwd=True) or find_dotenv(usecwd=False)
+        if discovered:
+            load_dotenv(discovered, override=False)
+            _key = os.getenv("OPENAI_API_KEY")
+            if _key is not None and _key.strip() == "":
+                os.environ.pop("OPENAI_API_KEY", None)
+    except Exception:
+        # Never fail import just because dotenv loading failed.
+        return
+
+
+_load_dotenv_if_present()
+
 logger = get_logger(__name__)
 
 
@@ -16,13 +66,13 @@ class BaseConfig:
         default="gpt-4o-mini",
         metadata={"help": "Class name indicating which LLM model to use."},
     )
-    llm_base_url: str = field(
+    llm_base_url: Optional[str] = field(
         default=None,
         metadata={
             "help": "Base URL for the LLM model, if none, means using OPENAI service."
         },
     )
-    embedding_base_url: str = field(
+    embedding_base_url: Optional[str] = field(
         default=None,
         metadata={
             "help": "Base URL for an OpenAI compatible embedding model, if none, means using OPENAI service."
@@ -104,6 +154,13 @@ class BaseConfig:
             "help": "Namespace prefix used to isolate KB data within a shared Neo4j instance."
         },
     )
+    neo4j_namespace_include_llm: bool = field(
+        default=False,
+        metadata={
+            "help": "If True, the effective Neo4j namespace is suffixed with llm_name and embedding_model_name. "
+            "Set to False (default) to reuse the same KB across different llm_name values (embedding model still remains part of the namespace)."
+        },
+    )
     neo4j_batch_size: int = field(
         default=500,
         metadata={"help": "Batch size for Neo4j UNWIND writes/reads."},
@@ -160,7 +217,7 @@ class BaseConfig:
             "help": "If set to True, will ignore all existing storage files and graph data and will rebuild from scratch."
         },
     )
-    rerank_dspy_file_path: str = field(
+    rerank_dspy_file_path: Optional[str] = field(
         default=None, metadata={"help": "Path to the rerank dspy file."}
     )
     passage_node_weight: float = field(
@@ -191,7 +248,7 @@ class BaseConfig:
         default=128,
         metadata={"help": "Number of overlap tokens between neighbouring chunks."},
     )
-    preprocess_chunk_max_token_size: int = field(
+    preprocess_chunk_max_token_size: Optional[int] = field(
         default=None,
         metadata={
             "help": "Max number of tokens each chunk can contain. If set to None, the whole doc will treated as a single chunk."
@@ -275,6 +332,13 @@ class BaseConfig:
     retrieval_top_k: int = field(
         default=200, metadata={"help": "Retrieving k documents at each step"}
     )
+    retrieval_recall_k_list: Optional[list[int]] = field(
+        default=None,
+        metadata={
+            "help": "Optional list of k values to compute Recall@k during retrieval evaluation. "
+            "Example: [1, 2, 5, 10, 20, 50]. If None, uses the library default."
+        },
+    )
     damping: float = field(
         default=0.5, metadata={"help": "Damping factor for ppr algorithm."}
     )
@@ -292,7 +356,7 @@ class BaseConfig:
     )
 
     # Save dir (highest level directory)
-    save_dir: str = field(
+    save_dir: Optional[str] = field(
         default=None,
         metadata={
             "help": "Directory to save all related information. If it's given, will overwrite all default save_dir setups. If it's not given, then if we're not running specific datasets, default to `outputs`, otherwise, default to a dataset-customized output dir."

@@ -14,9 +14,9 @@ def _get_llm_class(config: BaseConfig):
     if (
         config.llm_base_url is not None
         and "localhost" in config.llm_base_url
-        and os.getenv("OPENAI_API_KEY") is None
+        and (os.getenv("OPENAI_API_KEY") is None or os.getenv("OPENAI_API_KEY").strip() == "")
     ):
-        os.environ["OPENAI_API_KEY"] = "sk-"
+        os.environ["OPENAI_API_KEY"] = "sk-no-key"
 
     if config.llm_name.startswith("Transformers/"):
         raise ValueError(

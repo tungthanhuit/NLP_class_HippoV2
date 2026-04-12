@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 import json
 
 from src.hipporag.StandardRAG import StandardRAG
@@ -15,7 +15,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import logging
 
 
-def get_gold_docs(samples: List, dataset_name: str = None) -> List:
+def get_gold_docs(samples: List, dataset_name: Optional[str] = None) -> List:
     gold_docs = []
     for sample in samples:
         if "supporting_facts" in sample:  # hotpotqa, 2wikimultihopqa
@@ -23,7 +23,7 @@ def get_gold_docs(samples: List, dataset_name: str = None) -> List:
             gold_title_and_content_list = [
                 item for item in sample["context"] if item[0] in gold_title
             ]
-            if dataset_name.startswith("hotpotqa"):
+            if dataset_name and dataset_name.startswith("hotpotqa"):
                 gold_doc = [
                     item[0] + "\n" + "".join(item[1])
                     for item in gold_title_and_content_list
@@ -92,7 +92,13 @@ def get_gold_answers(samples):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="HippoRAG retrieval and QA")
+    parser = argparse.ArgumentParser(
+        description=(
+            "StandardRAG (DPR-only) retrieval and QA. "
+            "Note: the local index is stored under save_dir/<llm>_<embedding>, so changing --llm_name creates a separate index. "
+            "For reusing the exact same KB across different LLMs, use main.py with Neo4j and set --neo4j_namespace_include_llm false."
+        )
+    )
     parser.add_argument("--dataset", type=str, default="musique", help="Dataset name")
     parser.add_argument(
         "--llm_base_url",
@@ -101,6 +107,15 @@ def main():
         help="LLM base URL",
     )
     parser.add_argument("--llm_name", type=str, default="gpt-4o-mini", help="LLM name")
+    parser.add_argument(
+        "--embedding_base_url",
+        type=str,
+        default=None,
+        help=(
+            "Embedding model base URL (OpenAI-compatible). "
+            "If omitted, defaults to env EMBEDDING_BASE_URL, else --llm_base_url."
+        ),
+    )
     parser.add_argument(
         "--embedding_name",
         type=str,
@@ -128,12 +143,29 @@ def main():
     parser.add_argument(
         "--save_dir", type=str, default="outputs", help="Save directory"
     )
+    parser.add_argument(
+        "--neo4j_password",
+        type=str,
+        default=None,
+        help="Neo4j password. Defaults to env NEO4J_PASSWORD.",
+    )
+
+    parser.add_argument(
+        "--retrieval_recall_k_list",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of k values for retrieval evaluation Recall@k. "
+            "Example: '1,2,5,10,20,50'. If omitted, uses defaults (auto-clipped to retrieved size)."
+        ),
+    )
     args = parser.parse_args()
 
     dataset_name = args.dataset
     save_dir = args.save_dir
     llm_base_url = args.llm_base_url
     llm_name = args.llm_name
+    embedding_base_url = args.embedding_base_url or os.getenv("EMBEDDING_BASE_URL") or llm_base_url
     if save_dir == "outputs":
         save_dir = save_dir + "/" + dataset_name
     else:
@@ -147,6 +179,26 @@ def main():
 
     force_index_from_scratch = string_to_bool(args.force_index_from_scratch)
     force_openie_from_scratch = string_to_bool(args.force_openie_from_scratch)
+    neo4j_password = args.neo4j_password or os.getenv("NEO4J_PASSWORD")
+
+    retrieval_recall_k_list = None
+    if args.retrieval_recall_k_list is not None:
+        raw = args.retrieval_recall_k_list.strip()
+        if raw:
+            try:
+                if raw.startswith("["):
+                    parsed = json.loads(raw)
+                    if not isinstance(parsed, list):
+                        raise ValueError("Expected a JSON list")
+                    retrieval_recall_k_list = [int(x) for x in parsed]
+                else:
+                    retrieval_recall_k_list = [
+                        int(x.strip()) for x in raw.split(",") if x.strip()
+                    ]
+            except Exception:
+                parser.error(
+                    "--retrieval_recall_k_list must be a comma-separated list like '1,2,5,10' or a quoted JSON list like '[1,2,5,10]'."
+                )
 
     # Prepare datasets and evaluation
     samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
@@ -158,19 +210,22 @@ def main():
         assert (
             len(all_queries) == len(gold_docs) == len(gold_answers)
         ), "Length of queries, gold_docs, and gold_answers should be the same."
-    except:
+    except Exception:
         gold_docs = None
 
     config = BaseConfig(
         save_dir=save_dir,
         llm_base_url=llm_base_url,
+        embedding_base_url=embedding_base_url,
         llm_name=llm_name,
         dataset=dataset_name,
         embedding_model_name=args.embedding_name,
+        neo4j_password=neo4j_password,
         force_index_from_scratch=force_index_from_scratch,  # ignore previously stored index, set it to False if you want to use the previously stored index and embeddings
         force_openie_from_scratch=force_openie_from_scratch,
         rerank_dspy_file_path="src/hipporag/prompts/dspy_prompts/filter_llama3.3-70B-Instruct.json",
         retrieval_top_k=200,
+        retrieval_recall_k_list=retrieval_recall_k_list,
         linking_top_k=5,
         max_qa_steps=3,
         qa_top_k=5,

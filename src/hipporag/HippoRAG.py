@@ -2,7 +2,7 @@ import json
 import os
 import logging
 from dataclasses import asdict
-from typing import List, Set, Dict, Tuple
+from typing import List, Set, Dict, Tuple, Optional
 import numpy as np
 from collections import defaultdict
 from tqdm import tqdm
@@ -106,9 +106,24 @@ class HippoRAG:
                 "chunk_vector_backend='milvus' currently requires kb_backend='neo4j'"
             )
 
-        _print_config = ",\n  ".join(
-            [f"{k} = {v}" for k, v in asdict(self.global_config).items()]
-        )
+        secret_fields_to_env = {
+            "neo4j_password": "NEO4J_PASSWORD",
+            "milvus_token": "MILVUS_TOKEN",
+        }
+        printable_items = []
+        for k, v in asdict(self.global_config).items():
+            if k in secret_fields_to_env:
+                if v is not None and str(v) != "":
+                    printable_items.append(f"{k} = ***")
+                    continue
+                env_key = secret_fields_to_env[k]
+                if os.getenv(env_key):
+                    printable_items.append(f"{k} = (from env {env_key})")
+                    continue
+
+            printable_items.append(f"{k} = {v}")
+
+        _print_config = ",\n  ".join(printable_items)
         logger.debug(f"HippoRAG init with config:\n  {_print_config}\n")
         print(f"HippoRAG init with config:\n  {_print_config}\n")
 
@@ -159,7 +174,11 @@ class HippoRAG:
                     "kb_backend='neo4j' requires neo4j_password or env NEO4J_PASSWORD"
                 )
 
-            ns = f"{self.global_config.neo4j_namespace}_{llm_label}_{embedding_label}"
+            ns_parts = [self.global_config.neo4j_namespace]
+            if getattr(self.global_config, "neo4j_namespace_include_llm", True):
+                ns_parts.append(llm_label)
+            ns_parts.append(embedding_label)
+            ns = "_".join(ns_parts)
             self.kb = Neo4jKB(
                 Neo4jConfig(
                     uri=self.global_config.neo4j_uri,
@@ -560,6 +579,79 @@ class HippoRAG:
 
         self.ready_to_retrieve = False
 
+    def clear_neo4j_namespace(
+        self,
+        namespace: Optional[str] = None,
+        database: Optional[str] = None,
+        *,
+        delete_milvus_vectors: bool = True,
+        milvus_delete_batch_size: int = 512,
+    ) -> int:
+        """Delete all Neo4j KB data for a namespace (and optionally Milvus vectors).
+
+        This is a destructive operation. It deletes every Neo4j node with `ns=<namespace>`
+        in the selected Neo4j database, which also removes all stored embeddings.
+
+        Args:
+            namespace: Namespace to clear. Defaults to the current KB namespace.
+            database: Neo4j database to clear within. Defaults to the configured database.
+            delete_milvus_vectors: If chunk vectors are mirrored to Milvus, delete them too.
+                This only works for the *current* namespace (Milvus collection is namespace-derived).
+            milvus_delete_batch_size: Batch size for Milvus delete.
+
+        Returns:
+            Number of Neo4j nodes matched (best-effort count before deletion).
+        """
+
+        if self.global_config.kb_backend != "neo4j" or self.kb is None:
+            raise RuntimeError("clear_neo4j_namespace requires kb_backend='neo4j'")
+
+        ns_to_clear = (namespace or getattr(self.kb.cfg, "namespace", "") or "").strip()
+        if not ns_to_clear:
+            raise ValueError("namespace must be a non-empty string")
+
+        db_to_clear = (database or getattr(self.kb.cfg, "database", None) or self.global_config.neo4j_database)
+
+        # Best-effort Milvus cleanup for the current namespace.
+        if (
+            delete_milvus_vectors
+            and getattr(self.global_config, "chunk_vector_backend", "default") == "milvus"
+            and getattr(self, "_milvus_chunk_vectors", None) is not None
+        ):
+            current_ns = (getattr(self.kb.cfg, "namespace", "") or "").strip()
+            if ns_to_clear != current_ns:
+                logger.warning(
+                    "Requested clearing namespace '%s' but current Milvus collection is for '%s'; skipping Milvus cleanup.",
+                    ns_to_clear,
+                    current_ns,
+                )
+            else:
+                try:
+                    self.chunk_embedding_store.refresh()
+                    chunk_ids = list(self.chunk_embedding_store.get_all_ids())
+                    if chunk_ids:
+                        self._milvus_chunk_vectors.delete(
+                            chunk_ids,
+                            batch_size=int(milvus_delete_batch_size),
+                        )
+                except Exception:
+                    logger.exception("Failed deleting Milvus vectors for namespace '%s'", ns_to_clear)
+                    raise
+
+        deleted = self.kb.clear_namespace(namespace=ns_to_clear, database=db_to_clear)
+
+        # Reset in-memory state.
+        try:
+            self.chunk_embedding_store.refresh()
+            self.entity_embedding_store.refresh()
+            self.fact_embedding_store.refresh()
+        except Exception:
+            # If Neo4j is cleared while stores are mid-flight, refresh can fail; caller can re-init.
+            logger.debug("Embedding store refresh failed after namespace clear", exc_info=True)
+
+        self.ready_to_retrieve = False
+        return int(deleted)
+
     def _delete_neo4j(self, docs_to_delete: List[str]):
         if self.kb is None:
             raise RuntimeError("Neo4j KB is not initialized")
@@ -601,7 +693,7 @@ class HippoRAG:
         self,
         queries: List[str],
         num_to_retrieve: int = None,
-        gold_docs: List[List[str]] = None,
+        gold_docs: Optional[List[List[str]]] = None,
     ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
         """
         Performs retrieval using the HippoRAG 2 framework, which consists of several steps:
@@ -702,7 +794,14 @@ class HippoRAG:
 
         # Evaluate retrieval
         if gold_docs is not None:
-            k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
+            k_list = self.global_config.retrieval_recall_k_list
+            if k_list is None:
+                default_k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
+                min_retrieved = min((len(r.docs) for r in retrieval_results), default=0)
+                if min_retrieved > 0:
+                    k_list = [k for k in default_k_list if k <= min_retrieved]
+                else:
+                    k_list = default_k_list
             overall_retrieval_result, example_retrieval_results = (
                 retrieval_recall_evaluator.calculate_metric_scores(
                     gold_docs=gold_docs,
@@ -721,8 +820,8 @@ class HippoRAG:
     def rag_qa(
         self,
         queries: List[str | QuerySolution],
-        gold_docs: List[List[str]] = None,
-        gold_answers: List[List[str]] = None,
+        gold_docs: Optional[List[List[str]]] = None,
+        gold_answers: Optional[List[List[str]]] = None,
     ) -> (
         Tuple[List[QuerySolution], List[str], List[Dict]]
         | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]
@@ -823,7 +922,7 @@ class HippoRAG:
         self,
         queries: List[str],
         num_to_retrieve: int = None,
-        gold_docs: List[List[str]] = None,
+        gold_docs: Optional[List[List[str]]] = None,
     ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
         """
         Performs retrieval using a DPR framework, which consists of several steps:
@@ -895,7 +994,14 @@ class HippoRAG:
 
         # Evaluate retrieval
         if gold_docs is not None:
-            k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
+            k_list = self.global_config.retrieval_recall_k_list
+            if k_list is None:
+                default_k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
+                min_retrieved = min((len(r.docs) for r in retrieval_results), default=0)
+                if min_retrieved > 0:
+                    k_list = [k for k in default_k_list if k <= min_retrieved]
+                else:
+                    k_list = default_k_list
             overall_retrieval_result, example_retrieval_results = (
                 retrieval_recall_evaluator.calculate_metric_scores(
                     gold_docs=gold_docs,
@@ -914,8 +1020,8 @@ class HippoRAG:
     def rag_qa_dpr(
         self,
         queries: List[str | QuerySolution],
-        gold_docs: List[List[str]] = None,
-        gold_answers: List[List[str]] = None,
+        gold_docs: Optional[List[List[str]]] = None,
+        gold_answers: Optional[List[List[str]]] = None,
     ) -> (
         Tuple[List[QuerySolution], List[str], List[Dict]]
         | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]

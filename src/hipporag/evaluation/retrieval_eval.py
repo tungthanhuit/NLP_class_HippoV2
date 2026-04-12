@@ -20,7 +20,7 @@ class RetrievalRecall(BaseMetric):
         self,
         gold_docs: List[List[str]],
         retrieved_docs: List[List[str]],
-        k_list: List[int] = [1, 5, 10, 20],
+        k_list: Optional[List[int]] = None,
     ) -> Tuple[Dict[str, float], List[Dict[str, float]]]:
         """
         Calculates Recall@k for each example and pools results for all queries.
@@ -35,7 +35,18 @@ class RetrievalRecall(BaseMetric):
                 - A pooled dictionary with the averaged Recall@k across all examples.
                 - A list of dictionaries with Recall@k for each example.
         """
+        if k_list is None:
+            cfg_k_list = None
+            if self.global_config is not None:
+                cfg_k_list = getattr(self.global_config, "retrieval_recall_k_list", None)
+            k_list = cfg_k_list if cfg_k_list is not None else [1, 5, 10, 20]
+
+        # sanitize and normalize k_list
+        k_list = [int(k) for k in k_list]
+        k_list = [k for k in k_list if k > 0]
         k_list = sorted(set(k_list))
+        if len(k_list) == 0:
+            raise ValueError("k_list must contain at least one positive integer")
 
         example_eval_results = []
         pooled_eval_results = {f"Recall@{k}": 0.0 for k in k_list}

@@ -20,12 +20,14 @@ setuptools.setup(
         "transformers==4.45.2",
         "sentence-transformers==3.3.1",
         "openai==1.91.1",
+        "python-dotenv==1.2.2",
         "networkx==3.4.2",
         "python_igraph==0.11.8",
         "tiktoken==0.7.0",
         "pydantic==2.10.4",
         "tenacity==8.5.0",
-        "neo4j>=5.20.0",
+        "neo4j==5.28.3",
+        "pymilvus==2.6.12",
         "tqdm",  # No version specified
     ],
 )

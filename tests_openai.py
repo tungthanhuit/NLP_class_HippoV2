@@ -1,4 +1,7 @@
+import os
+
 from src.hipporag import HippoRAG
+from src.hipporag.utils.config_utils import BaseConfig
 
 
 def _print_qa_round(round_name, query_solutions):
@@ -24,19 +27,25 @@ def main():
     ]
 
     save_dir = "outputs/openai_test"  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
-    llm_model_name = "gpt-4o-mini"  # Any OpenAI model name
-    embedding_model_name = "text-embedding-3-small"  # Embedding model name
-    llm_base_url = "http://localhost:4000/v1"
-    embedding_base_url = "http://localhost:4000/v1"
+    llm_base_url = os.getenv("HIPPORAG_LLM_BASE_URL", "http://localhost:4000/v1")
+    embedding_base_url = (
+        os.getenv("HIPPORAG_EMBEDDING_BASE_URL")
+        or os.getenv("EMBEDDING_BASE_URL")
+        or llm_base_url
+    )
 
-    # Startup a HippoRAG instance
-    hipporag = HippoRAG(
+    cfg = BaseConfig(
         save_dir=save_dir,
-        llm_model_name=llm_model_name,
-        embedding_model_name=embedding_model_name,
+        llm_name=os.getenv("HIPPORAG_LLM_NAME", "gpt-4o-mini"),
         llm_base_url=llm_base_url,
+        embedding_model_name=os.getenv(
+            "HIPPORAG_EMBEDDING_MODEL_NAME", "text-embedding-3-small"
+        ),
         embedding_base_url=embedding_base_url,
     )
+
+    # Startup a HippoRAG instance
+    hipporag = HippoRAG(global_config=cfg)
 
     # Run indexing
     hipporag.index(docs=docs)
@@ -76,13 +85,7 @@ def main():
     print("First round.")
 
     # Startup a HippoRAG instance
-    hipporag = HippoRAG(
-        save_dir=save_dir,
-        llm_model_name=llm_model_name,
-        embedding_model_name=embedding_model_name,
-        llm_base_url=llm_base_url,
-        embedding_base_url=embedding_base_url,
-    )
+    hipporag = HippoRAG(global_config=cfg)
 
     result = hipporag.rag_qa(queries=queries, gold_docs=gold_docs, gold_answers=answers)
     query_solutions = result[0]
@@ -95,13 +98,7 @@ def main():
     print("Second round.")
 
     # Startup a HippoRAG instance
-    hipporag = HippoRAG(
-        save_dir=save_dir,
-        llm_model_name=llm_model_name,
-        embedding_model_name=embedding_model_name,
-        llm_base_url=llm_base_url,
-        embedding_base_url=embedding_base_url,
-    )
+    hipporag = HippoRAG(global_config=cfg)
 
     new_docs = [
         "Tom Hort's birthplace is Montebello.",

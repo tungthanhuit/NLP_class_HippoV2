@@ -37,21 +37,34 @@ class TransformersEmbeddingModel(BaseEmbeddingModel):
             ]
         )
 
-    def encode(self, texts: List[str]) -> None:
+    def encode(self, texts: List[str]) -> np.ndarray:
         try:
             response = self.model.encode(texts, batch_size=self.batch_size)
         except Exception as err:
             raise Exception(f"An error occurred: {err}")
         return np.array(response)
 
-    def batch_encode(self, texts: List[str], **kwargs) -> None:
+    def batch_encode(self, texts: List[str] | str, **kwargs) -> np.ndarray:
         start_time = time.time()
+
+        if isinstance(texts, str):
+            texts = [texts]
+
+        # Match OpenAIEmbeddingModel calling convention: callers may pass `instruction` and `norm`.
+        norm = kwargs.get(
+            "norm",
+            getattr(self.global_config, "embedding_return_as_normalized", True),
+        )
 
         print(
             f"[Embedding] Transformers model={self.model_id} n={len(texts)} batch_size={self.batch_size}"
         )
         if len(texts) < self.batch_size:
             results = self.encode(texts)
+            if norm:
+                denom = np.linalg.norm(results, axis=1, keepdims=True)
+                denom[denom == 0] = 1.0
+                results = results / denom
             print(
                 f"[Embedding] done shape={getattr(results, 'shape', '(unknown)')} in {time.time() - start_time:.2f}s"
             )
@@ -62,6 +75,12 @@ class TransformersEmbeddingModel(BaseEmbeddingModel):
         for i in tqdm(batch_indexes, desc="Batch Encoding"):
             results.append(self.encode(texts[i : i + self.batch_size]))
         results = np.concatenate(results)
+
+        if norm:
+            denom = np.linalg.norm(results, axis=1, keepdims=True)
+            denom[denom == 0] = 1.0
+            results = results / denom
+
         print(
             f"[Embedding] done shape={getattr(results, 'shape', '(unknown)')} in {time.time() - start_time:.2f}s"
         )

@@ -92,6 +92,10 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
         if kwargs:
             params.update(kwargs)
 
+        # Callers often pass `norm=`; OpenAI API doesn't take it, but we use it
+        # to control post-processing normalization.
+        norm = kwargs.get("norm", self.embedding_config.norm)
+
         if "instruction" in kwargs:
             if kwargs["instruction"] != "":
                 params["instruction"] = f"Instruct: {kwargs['instruction']}\nQuery: "
@@ -124,7 +128,7 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
         if isinstance(results, torch.Tensor):
             results = results.cpu()
             results = results.numpy()
-        if self.embedding_config.norm:
+        if norm:
             results = (results.T / np.linalg.norm(results, axis=1)).T
 
         elapsed = time.time() - start_time

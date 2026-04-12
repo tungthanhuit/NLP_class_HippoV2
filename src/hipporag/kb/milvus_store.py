@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, cast
 
 import numpy as np
 
@@ -118,18 +118,28 @@ class MilvusVectorStore:
 
         if utility.has_collection(self.collection_name, using=self._alias):
             col = Collection(self.collection_name, using=self._alias)
-            # Best-effort dimension check
-            try:
-                for f in col.schema.fields:
-                    if f.name == self.vector_field:
-                        existing_dim = int(f.params.get("dim"))
-                        if existing_dim != dim:
-                            raise ValueError(
-                                f"Milvus collection '{self.collection_name}' dim={existing_dim} does not match requested dim={dim}"
-                            )
-                        break
-            except Exception:
-                logger.debug("Could not validate Milvus collection schema; continuing")
+            # Best-effort dimension check. IMPORTANT: do not swallow dim mismatches.
+            for f in getattr(col.schema, "fields", []) or []:
+                if getattr(f, "name", None) != self.vector_field:
+                    continue
+                params = getattr(f, "params", {}) or {}
+                try:
+                    dim_param = params.get("dim")
+                    existing_dim = int(dim_param) if dim_param is not None else None
+                except Exception:
+                    logger.debug(
+                        "Could not parse Milvus vector dimension for '%s'; continuing",
+                        self.collection_name,
+                        exc_info=True,
+                    )
+                    existing_dim = None
+
+                if existing_dim is not None and existing_dim != dim:
+                    raise ValueError(
+                        f"Milvus collection '{self.collection_name}' dim={existing_dim} does not match requested dim={dim}. "
+                        "This usually means you changed embedding models without clearing/recreating the Milvus collection."
+                    )
+                break
 
             self._collection = col
             self._dim = dim
@@ -162,7 +172,7 @@ class MilvusVectorStore:
             "params": self.cfg.milvus_index_params or {},
         }
         try:
-            col.create_index(field_name=self.vector_field, index_params=index_params)
+            col.create_index(field_name=self.vector_field, index_params=index_params)  # type: ignore
         except Exception:
             logger.exception("Failed creating Milvus index; will rely on default")
 
@@ -185,6 +195,9 @@ class MilvusVectorStore:
         if not ids:
             return
 
+        if batch_size <= 0:
+            raise ValueError("batch_size must be > 0")
+
         vectors = np.asarray(vectors, dtype=np.float32)
         if vectors.ndim != 2:
             raise ValueError("vectors must be a 2D array")
@@ -195,15 +208,22 @@ class MilvusVectorStore:
         self.ensure_collection(dim)
         col = self._get_collection()
 
-        # Load for searching; insert does not require load, but load is cheap.
+        # Load is required for searching; insert/upsert does not require load.
+        # We do a best-effort load here to reduce latency for immediate searches.
         try:
             col.load()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Milvus collection '%s' failed to load before upsert: %s",
+                self.collection_name,
+                e,
+            )
 
-        for id_batch, vec_batch in zip(_batched(ids, batch_size), _batched(vectors, batch_size)):
-            vec_list = np.asarray(vec_batch, dtype=np.float32).tolist()
-            data = [list(id_batch), vec_list]
+        for start in range(0, len(ids), batch_size):
+            id_batch = ids[start : start + batch_size]
+            vec_batch = vectors[start : start + batch_size]
+            vec_list = vec_batch.tolist()
+            data = [id_batch, vec_list]
             try:
                 if hasattr(col, "upsert"):
                     col.upsert(data)
@@ -265,8 +285,12 @@ class MilvusVectorStore:
 
         try:
             col.load()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Milvus collection '%s' failed to load before search: %s",
+                self.collection_name,
+                e,
+            )
 
         params = {
             "metric_type": self.cfg.milvus_metric_type,
@@ -274,12 +298,15 @@ class MilvusVectorStore:
         }
 
         # pymilvus expects a batch of queries
-        results = col.search(
+        results = cast(
+            Any,
+            col.search(
             data=[query_vector.tolist()],
             anns_field=self.vector_field,
             param=params,
             limit=int(top_k),
             output_fields=[],
+            ),
         )
 
         if not results:
@@ -336,23 +363,56 @@ class Neo4jMilvusEmbeddingStore:
         if not ids:
             return
 
-        if self._milvus.count() > 0:
+        # Best-effort: if Milvus has at least as many entities as Neo4j, assume populated.
+        # If counts look low (including partial population), we attempt an idempotent upsert of all ids.
+        existing_cnt = int(self._milvus.count() or 0)
+        if existing_cnt >= len(ids) and existing_cnt > 0:
             return
 
         logger.info(
-            "Milvus collection '%s' appears empty; backfilling %d vectors from Neo4j",
+            "Milvus collection '%s' appears empty/underpopulated (have=%d need=%d); backfilling from Neo4j",
             self._milvus.collection_name,
+            existing_cnt,
             len(ids),
         )
 
-        # Ensure collection dimension is initialized.
+        def _stack_strict(batch_ids: List[str]) -> np.ndarray:
+            vecs: List[np.ndarray] = []
+            dim_local: Optional[int] = None
+            missing: List[str] = []
+            for hid in batch_ids:
+                try:
+                    v = self._neo4j.get_embedding(hid, dtype=np.float32)
+                except Exception:
+                    missing.append(hid)
+                    continue
+                if v.ndim != 1 or v.size == 0:
+                    missing.append(hid)
+                    continue
+                if dim_local is None:
+                    dim_local = int(v.shape[0])
+                elif int(v.shape[0]) != dim_local:
+                    raise ValueError(
+                        f"Inconsistent embedding dims detected while backfilling Milvus: expected {dim_local}, got {int(v.shape[0])} for id='{hid}'"
+                    )
+                vecs.append(v)
+
+            if missing:
+                raise ValueError(
+                    f"Cannot backfill Milvus: {len(missing)} embeddings missing/invalid in Neo4j (example id='{missing[0]}'). "
+                    "Re-index with force_index_from_scratch=True to regenerate embeddings."
+                )
+            if not vecs:
+                return np.empty((0, 0), dtype=np.float32)
+            return np.stack(vecs, axis=0)
+
+        # Ensure collection dimension is initialized using a few non-empty samples.
         try:
-            sample = self._neo4j.get_embeddings([ids[0]])
-            sample = np.asarray(sample, dtype=np.float32)
-            if sample.ndim == 1:
-                dim = int(sample.shape[0])
-            else:
-                dim = int(sample.shape[1])
+            sample_ids = list(ids[: min(10, len(ids))])
+            sample_vecs = _stack_strict(sample_ids)
+            if sample_vecs.ndim != 2 or sample_vecs.shape[0] == 0:
+                raise ValueError("Could not infer embedding dimension from Neo4j (no valid sample vectors)")
+            dim = int(sample_vecs.shape[1])
             self._milvus.ensure_collection(dim)
         except Exception:
             logger.exception("Failed initializing Milvus collection for backfill")
@@ -360,8 +420,8 @@ class Neo4jMilvusEmbeddingStore:
 
         for batch in _batched(ids, batch_size):
             batch_ids = list(batch)
-            embs = self._neo4j.get_embeddings(batch_ids)
-            self._milvus.upsert(batch_ids, np.asarray(embs, dtype=np.float32))
+            vecs = _stack_strict(batch_ids)
+            self._milvus.upsert(batch_ids, vecs)
 
     def insert_strings(self, texts: List[str]):
         if not texts:
@@ -382,7 +442,13 @@ class Neo4jMilvusEmbeddingStore:
             logger.exception("Failed reading embeddings from Neo4j store")
             raise
 
-        self._milvus.upsert(missing_ids, np.asarray(embs, dtype=np.float32))
+        embs = np.asarray(embs, dtype=np.float32)
+        if embs.ndim != 2 or embs.shape[0] != len(missing_ids):
+            raise ValueError(
+                f"Unexpected embedding array shape from Neo4j store: shape={getattr(embs, 'shape', None)}, expected=({len(missing_ids)}, dim)"
+            )
+
+        self._milvus.upsert(missing_ids, embs)
 
     def delete(self, hash_ids: List[str]):
         # IMPORTANT: do NOT delete chunk nodes directly from Neo4j here.

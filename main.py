@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 import json
 
 from src.hipporag.HippoRAG import HippoRAG
@@ -15,7 +15,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import logging
 
 
-def get_gold_docs(samples: List, dataset_name: str = None) -> List:
+def get_gold_docs(samples: List, dataset_name: Optional[str] = None) -> List:
     gold_docs = []
     for sample in samples:
         if "supporting_facts" in sample:  # hotpotqa, 2wikimultihopqa
@@ -23,7 +23,7 @@ def get_gold_docs(samples: List, dataset_name: str = None) -> List:
             gold_title_and_content_list = [
                 item for item in sample["context"] if item[0] in gold_title
             ]
-            if dataset_name.startswith("hotpotqa"):
+            if dataset_name and dataset_name.startswith("hotpotqa"):
                 gold_doc = [
                     item[0] + "\n" + "".join(item[1])
                     for item in gold_title_and_content_list
@@ -97,10 +97,19 @@ def main():
     parser.add_argument(
         "--llm_base_url",
         type=str,
-        default="https://api.openai.com/v1",
+        default="http://localhost:4000/v1",
         help="LLM base URL",
     )
     parser.add_argument("--llm_name", type=str, default="gpt-4o-mini", help="LLM name")
+    parser.add_argument(
+        "--embedding_base_url",
+        type=str,
+        default=None,
+        help=(
+            "Embedding model base URL (OpenAI-compatible). "
+            "If omitted, defaults to env EMBEDDING_BASE_URL, else --llm_base_url."
+        ),
+    )
     parser.add_argument(
         "--embedding_name",
         type=str,
@@ -128,12 +137,95 @@ def main():
     parser.add_argument(
         "--save_dir", type=str, default="outputs", help="Save directory"
     )
+
+    # Storage backends
+    # NOTE: BaseConfig defaults to kb_backend='parquet' and chunk_vector_backend='default'.
+    # This script defaults to Neo4j+Milvus because it is commonly used for large-scale runs.
+    # If you want to reuse/share the same KB across runs or LLMs, control it via the
+    # Neo4j namespace flags below (namespace and whether to include llm_name).
+    parser.add_argument(
+        "--kb_backend",
+        choices=["parquet", "neo4j"],
+        default="neo4j",
+        help="KB persistence backend. 'parquet' stores locally; 'neo4j' stores in Neo4j.",
+    )
+    parser.add_argument(
+        "--chunk_vector_backend",
+        choices=["default", "milvus"],
+        default="milvus",
+        help="Chunk/passage vector backend. 'default' uses the KB backend; 'milvus' uses Milvus.",
+    )
+
+    # Neo4j/Milvus runtime overrides
+    parser.add_argument(
+        "--neo4j_namespace",
+        type=str,
+        default=None,
+        help="Neo4j namespace prefix. Defaults to env NEO4J_NAMESPACE or 'hipporag'.",
+    )
+    parser.add_argument(
+        "--neo4j_namespace_include_llm",
+        type=str,
+        default="true",
+        help="If false, reuse the same Neo4j KB across different --llm_name values (embedding model still remains part of the namespace).",
+    )
+    parser.add_argument(
+        "--neo4j_uri",
+        type=str,
+        default=None,
+        help="Neo4j Bolt URI. Defaults to env NEO4J_URI or 'bolt://localhost:7687'.",
+    )
+    parser.add_argument(
+        "--neo4j_user",
+        type=str,
+        default=None,
+        help="Neo4j username. Defaults to env NEO4J_USER or 'neo4j'.",
+    )
+    parser.add_argument(
+        "--neo4j_password",
+        type=str,
+        default=None,
+        help="Neo4j password. Defaults to env NEO4J_PASSWORD.",
+    )
+    parser.add_argument(
+        "--neo4j_database",
+        type=str,
+        default=None,
+        help="Neo4j database name. Defaults to env NEO4J_DATABASE or 'neo4j'.",
+    )
+    parser.add_argument(
+        "--milvus_uri",
+        type=str,
+        default=None,
+        help="Milvus URI. Defaults to env MILVUS_URI or 'http://localhost:19530'.",
+    )
+    parser.add_argument(
+        "--milvus_token",
+        type=str,
+        default=None,
+        help="Milvus token. Defaults to env MILVUS_TOKEN.",
+    )
+
+    parser.add_argument(
+        "--retrieval_recall_k_list",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of k values for retrieval evaluation Recall@k. "
+            "Example: '1,2,5,10,20,50'. If omitted, uses defaults (auto-clipped to retrieved size)."
+        ),
+    )
     args = parser.parse_args()
 
     dataset_name = args.dataset
     save_dir = args.save_dir
     llm_base_url = args.llm_base_url
     llm_name = args.llm_name
+    embedding_base_url = (
+        args.embedding_base_url
+        or os.getenv("EMBEDDING_BASE_URL")
+        or llm_base_url
+    )
     if save_dir == "outputs":
         save_dir = save_dir + "/" + dataset_name
     else:
@@ -148,6 +240,34 @@ def main():
     force_index_from_scratch = string_to_bool(args.force_index_from_scratch)
     force_openie_from_scratch = string_to_bool(args.force_openie_from_scratch)
 
+    neo4j_namespace_include_llm = string_to_bool(args.neo4j_namespace_include_llm)
+    neo4j_namespace = (args.neo4j_namespace or os.getenv("NEO4J_NAMESPACE") or "hipporag").strip()
+    neo4j_uri = args.neo4j_uri or os.getenv("NEO4J_URI") or "bolt://localhost:7687"
+    neo4j_user = args.neo4j_user or os.getenv("NEO4J_USER") or "neo4j"
+    neo4j_password = args.neo4j_password or os.getenv("NEO4J_PASSWORD")
+    neo4j_database = args.neo4j_database or os.getenv("NEO4J_DATABASE") or "neo4j"
+    milvus_uri = args.milvus_uri or os.getenv("MILVUS_URI") or "http://localhost:19530"
+    milvus_token = args.milvus_token or os.getenv("MILVUS_TOKEN")
+
+    retrieval_recall_k_list = None
+    if args.retrieval_recall_k_list is not None:
+        raw = args.retrieval_recall_k_list.strip()
+        if raw:
+            try:
+                if raw.startswith("["):
+                    parsed = json.loads(raw)
+                    if not isinstance(parsed, list):
+                        raise ValueError("Expected a JSON list")
+                    retrieval_recall_k_list = [int(x) for x in parsed]
+                else:
+                    retrieval_recall_k_list = [
+                        int(x.strip()) for x in raw.split(",") if x.strip()
+                    ]
+            except Exception:
+                parser.error(
+                    "--retrieval_recall_k_list must be a comma-separated list like '1,2,5,10' or a quoted JSON list like '[1,2,5,10]'."
+                )
+
     # Prepare datasets and evaluation
     samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
     all_queries = [s["question"] for s in samples]
@@ -158,19 +278,31 @@ def main():
         assert (
             len(all_queries) == len(gold_docs) == len(gold_answers)
         ), "Length of queries, gold_docs, and gold_answers should be the same."
-    except:
+    except Exception:
         gold_docs = None
 
     config = BaseConfig(
         save_dir=save_dir,
+        kb_backend=args.kb_backend,
         llm_base_url=llm_base_url,
+        chunk_vector_backend=args.chunk_vector_backend,
+        milvus_uri=milvus_uri,
+        milvus_token=milvus_token,
         llm_name=llm_name,
         dataset=dataset_name,
+        embedding_base_url=embedding_base_url,
         embedding_model_name=args.embedding_name,
+        neo4j_uri=neo4j_uri,
+        neo4j_user=neo4j_user,
+        neo4j_password=neo4j_password,
+        neo4j_database=neo4j_database,
+        neo4j_namespace=neo4j_namespace,
+        neo4j_namespace_include_llm=neo4j_namespace_include_llm,
         force_index_from_scratch=force_index_from_scratch,  # ignore previously stored index, set it to False if you want to use the previously stored index and embeddings
         force_openie_from_scratch=force_openie_from_scratch,
         rerank_dspy_file_path="src/hipporag/prompts/dspy_prompts/filter_llama3.3-70B-Instruct.json",
         retrieval_top_k=200,
+        retrieval_recall_k_list=retrieval_recall_k_list,
         linking_top_k=5,
         max_qa_steps=3,
         qa_top_k=5,

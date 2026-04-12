@@ -1,4 +1,10 @@
+import os
+
 from src.hipporag import HippoRAG
+from src.hipporag.utils.config_utils import BaseConfig
+import dotenv
+
+dotenv.load_dotenv(dotenv.find_dotenv())  # Load .env file if present
 
 
 def _print_qa(query_solutions):
@@ -23,20 +29,27 @@ def main():
         "Montebello is a part of Rockland County.",
     ]
 
-    llm_model_name = "gpt-4o-mini"  # Any OpenAI model name
-    embedding_model_name = "text-embedding-3-small"  # Embedding model name
-    llm_base_url = "http://localhost:4000/v1"
-    embedding_base_url = "http://localhost:4000/v1"
     save_dir = "outputs/openai"  # Define save directory for HippoRAG objects (each LLM/Embedding model combination will create a new subdirectory)
 
-    # Startup a HippoRAG instance
-    hipporag = HippoRAG(
+    llm_base_url = os.getenv("HIPPORAG_LLM_BASE_URL", "http://localhost:4000/v1")
+    embedding_base_url = (
+        os.getenv("HIPPORAG_EMBEDDING_BASE_URL")
+        or os.getenv("EMBEDDING_BASE_URL")
+        or llm_base_url
+    )
+
+    cfg = BaseConfig(
         save_dir=save_dir,
-        llm_model_name=llm_model_name,
-        embedding_model_name=embedding_model_name,
+        llm_name=os.getenv("HIPPORAG_LLM_NAME", "gpt-4o-mini"),
         llm_base_url=llm_base_url,
+        embedding_model_name=os.getenv(
+            "HIPPORAG_EMBEDDING_MODEL_NAME", "text-embedding-3-small"
+        ),
         embedding_base_url=embedding_base_url,
     )
+
+    # Startup a HippoRAG instance
+    hipporag = HippoRAG(global_config=cfg)
 
     # Run indexing
     hipporag.index(docs=docs)

@@ -88,14 +88,69 @@ class Neo4jKB:
                     # Neo4j Community/older instances might not support composite constraints in this form.
                     logger.exception("Schema statement failed: %s", stmt)
 
-    def clear_namespace(self) -> None:
-        with self.driver.session(database=self.cfg.database) as session:
-            session.execute_write(
-                lambda tx: tx.run(
-                    "MATCH (n {ns: $ns}) DETACH DELETE n",
-                    ns=self.cfg.namespace,
-                )
+    def clear_namespace(
+        self,
+        namespace: Optional[str] = None,
+        database: Optional[str] = None,
+    ) -> int:
+        """Delete *all* nodes/relationships for a namespace in a Neo4j database.
+
+        This deletes everything that matches `n.ns = namespace` (any label), which includes
+        HippoRAG chunk/entity/fact nodes and their embedding properties.
+
+        Returns:
+            The number of nodes matched (best-effort count before deletion).
+        """
+
+        ns = (namespace or self.cfg.namespace or "").strip()
+        if not ns:
+            raise ValueError("namespace must be a non-empty string")
+
+        db = (database or self.cfg.database or "neo4j").strip() or "neo4j"
+
+        count_query = "MATCH (n {ns: $ns}) RETURN count(n) AS c"
+        delete_query = "MATCH (n {ns: $ns}) DETACH DELETE n"
+
+        with self.driver.session(database=db) as session:
+            rec = session.execute_read(
+                lambda tx: tx.run(count_query, ns=ns).single()
             )
+            matched = int(rec["c"]) if rec and rec.get("c") is not None else 0
+
+            session.execute_write(lambda tx: tx.run(delete_query, ns=ns))
+
+        return matched
+
+    @staticmethod
+    def clear_neo4j_namespace(
+        *,
+        uri: str,
+        user: str,
+        password: str,
+        namespace: str,
+        database: str = "neo4j",
+        batch_size: int = 500,
+    ) -> int:
+        """Convenience helper to clear a namespace without constructing HippoRAG.
+
+        Returns:
+            The number of nodes matched (best-effort count before deletion).
+        """
+
+        kb = Neo4jKB(
+            Neo4jConfig(
+                uri=uri,
+                user=user,
+                password=password,
+                database=database,
+                namespace=namespace,
+                batch_size=batch_size,
+            )
+        )
+        try:
+            return kb.clear_namespace(namespace=namespace, database=database)
+        finally:
+            kb.close()
 
     # -------------------- Embedding nodes --------------------
     def upsert_nodes(
@@ -454,6 +509,30 @@ class Neo4jKB:
             )
 
 
+def clear_neo4j_namespace(
+    *,
+    uri: str,
+    user: str,
+    password: str,
+    namespace: str,
+    database: str = "neo4j",
+    batch_size: int = 500,
+) -> int:
+    """Module-level convenience helper.
+
+    This is what external callers (like standalone scripts) should import.
+    """
+
+    return Neo4jKB.clear_neo4j_namespace(
+        uri=uri,
+        user=user,
+        password=password,
+        namespace=namespace,
+        database=database,
+        batch_size=batch_size,
+    )
+
+
 class Neo4jEmbeddingStore:
     """Drop-in replacement for EmbeddingStore using Neo4j for persistence."""
 
@@ -473,6 +552,7 @@ class Neo4jEmbeddingStore:
         self.hash_ids: List[str] = []
         self.texts: List[str] = []
         self.embeddings: List[List[float]] = []
+        self._embedding_dim: Optional[int] = None
         self.hash_id_to_idx: Dict[str, int] = {}
         self.hash_id_to_row: Dict[str, Dict[str, Any]] = {}
         self.hash_id_to_text: Dict[str, str] = {}
@@ -486,6 +566,14 @@ class Neo4jEmbeddingStore:
     def _load_data(self) -> None:
         ids, texts, embs = self.kb.load_all_nodes(self.label)
         self.hash_ids, self.texts, self.embeddings = ids, texts, embs
+        self._embedding_dim = None
+        for e in self.embeddings:
+            try:
+                if e is not None and len(e) > 0:
+                    self._embedding_dim = int(len(e))
+                    break
+            except Exception:
+                continue
         self.hash_id_to_idx = {h: idx for idx, h in enumerate(self.hash_ids)}
         self.hash_id_to_row = {
             h: {"hash_id": h, "content": t} for h, t in zip(self.hash_ids, self.texts)
@@ -562,11 +650,58 @@ class Neo4jEmbeddingStore:
         return set(row["content"] for row in self.hash_id_to_row.values())
 
     def get_embedding(self, hash_id, dtype=np.float32) -> np.ndarray:
-        return np.asarray(self.embeddings[self.hash_id_to_idx[hash_id]], dtype=dtype)
+        emb = self.embeddings[self.hash_id_to_idx[hash_id]]
+        if emb is None or len(emb) == 0:
+            raise ValueError(
+                f"Missing/empty embedding for id='{hash_id}' (label={self.label}, ns={self.kb.cfg.namespace}). "
+                "This usually indicates legacy or partially-written Neo4j data; re-index with force_index_from_scratch=True."
+            )
+        arr = np.asarray(emb, dtype=dtype)
+        if arr.ndim != 1:
+            raise ValueError(
+                f"Expected 1D embedding for id='{hash_id}', got shape={getattr(arr, 'shape', None)}"
+            )
+        return arr
 
     def get_embeddings(self, hash_ids, dtype=np.float32) -> np.ndarray:
         if not hash_ids:
-            return np.array([], dtype=dtype)
-        indices = np.array([self.hash_id_to_idx[h] for h in hash_ids], dtype=np.intp)
-        embeddings = np.array(self.embeddings, dtype=dtype)[indices]
-        return embeddings
+            dim = int(self._embedding_dim or 0)
+            return np.empty((0, dim), dtype=dtype)
+
+        # Build a strict 2D float array; fail fast on missing/ragged embeddings.
+        indices = [self.hash_id_to_idx[h] for h in hash_ids]
+        selected = [self.embeddings[i] for i in indices]
+
+        dim: Optional[int] = None
+        stacked: List[np.ndarray] = []
+        missing: List[str] = []
+
+        for hid, emb in zip(hash_ids, selected):
+            if emb is None or len(emb) == 0:
+                missing.append(hid)
+                continue
+            arr = np.asarray(emb, dtype=dtype)
+            if arr.ndim != 1:
+                raise ValueError(
+                    f"Invalid embedding shape for id='{hid}' (expected 1D, got {getattr(arr, 'shape', None)})"
+                )
+            if dim is None:
+                dim = int(arr.shape[0])
+            elif int(arr.shape[0]) != dim:
+                raise ValueError(
+                    f"Ragged embeddings detected in Neo4jEmbeddingStore (label={self.label}, ns={self.kb.cfg.namespace}): "
+                    f"expected dim={dim}, got dim={int(arr.shape[0])} for id='{hid}'."
+                )
+            stacked.append(arr)
+
+        if missing:
+            raise ValueError(
+                f"Found {len(missing)} nodes with missing/empty embeddings in Neo4jEmbeddingStore "
+                f"(label={self.label}, ns={self.kb.cfg.namespace}). Example id='{missing[0]}'. "
+                "Re-index with force_index_from_scratch=True to regenerate embeddings."
+            )
+
+        if dim is None:
+            return np.empty((0, 0), dtype=dtype)
+
+        return np.stack(stacked, axis=0)

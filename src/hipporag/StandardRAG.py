@@ -1,7 +1,7 @@
 import os
 import logging
 from dataclasses import asdict
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import numpy as np
 from tqdm import tqdm
 import numpy as np
@@ -12,6 +12,7 @@ from .embedding_model import _get_embedding_model_class, BaseEmbeddingModel
 from .embedding_store import EmbeddingStore
 from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
+from .prompts.prompt_template_manager import PromptTemplateManager
 from .prompts.linking import get_query_instruction
 from .utils.misc_utils import *
 from .utils.config_utils import BaseConfig
@@ -86,6 +87,10 @@ class StandardRAG:
             "chunk",
         )
 
+        self.prompt_template_manager = PromptTemplateManager(
+            role_mapping={"system": "system", "user": "user", "assistant": "assistant"}
+        )
+
         self.ready_to_retrieve = False
 
         self.ppr_time = 0
@@ -134,7 +139,7 @@ class StandardRAG:
         self,
         queries: List[str],
         num_to_retrieve: int = None,
-        gold_docs: List[List[str]] = None,
+        gold_docs: Optional[List[List[str]]] = None,
     ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
         """
         Performs retrieval using a DPR framework, which consists of several steps:
@@ -206,7 +211,14 @@ class StandardRAG:
 
         # Evaluate retrieval
         if gold_docs is not None:
-            k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
+            k_list = self.global_config.retrieval_recall_k_list
+            if k_list is None:
+                default_k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
+                min_retrieved = min((len(r.docs) for r in retrieval_results), default=0)
+                if min_retrieved > 0:
+                    k_list = [k for k in default_k_list if k <= min_retrieved]
+                else:
+                    k_list = default_k_list
             overall_retrieval_result, example_retrieval_results = (
                 retrieval_recall_evaluator.calculate_metric_scores(
                     gold_docs=gold_docs,
@@ -225,8 +237,8 @@ class StandardRAG:
     def rag_qa(
         self,
         queries: List[str | QuerySolution],
-        gold_docs: List[List[str]] = None,
-        gold_answers: List[List[str]] = None,
+        gold_docs: Optional[List[List[str]]] = None,
+        gold_answers: Optional[List[List[str]]] = None,
     ) -> (
         Tuple[List[QuerySolution], List[str], List[Dict]]
         | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]
@@ -273,7 +285,7 @@ class StandardRAG:
                     queries=queries, gold_docs=gold_docs
                 )
             else:
-                queries = self.retrieve_dpr(queries=queries)
+                queries = self.retrieve(queries=queries)
 
         # Performing QA
         queries_solutions, all_response_message, all_metadata = self.qa(queries)
