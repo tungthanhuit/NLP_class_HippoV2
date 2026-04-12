@@ -65,8 +65,12 @@ def _normalize_answer(text: str) -> str:
     text = text.lower()
     text = text.translate(str.maketrans("", "", string.punctuation))
     text = re.sub(r"\b(a|an|the)\b", " ", text)
-    text = " ".join(text.split())
-    return text
+    return " ".join(text.split())
+
+
+def _normalize_question(text: str) -> str:
+    """Normalize question text for fuzzy matching (lower-case + collapse whitespace)."""
+    return " ".join(text.lower().split())
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +217,7 @@ def _parse_hotpot_ground_truth(records: list[dict]) -> list[dict]:
 
         result.append({
             "id": rec["_id"],
+            "question": rec.get("question", ""),
             "gold_answers": [rec["answer"]],
             "gold_docs": gold_docs,
         })
@@ -236,6 +241,7 @@ def _parse_musique_ground_truth(records: list[dict]) -> list[dict]:
 
         result.append({
             "id": rec["id"],
+            "question": rec.get("question", ""),
             "gold_answers": answers if answers else [rec.get("answer", "")],
             "gold_docs": gold_docs,
         })
@@ -267,30 +273,51 @@ def evaluate(
             qid = str(rec.get("id", ""))
             gt = gt_index.get(qid)
             if gt is None:
-                print(f"[warn] id '{qid}' not found in ground-truth file — skipping.", file=sys.stderr)
                 skipped += 1
                 continue
             merged.append({**rec, "gold_answers": gt["gold_answers"], "gold_docs": gt["gold_docs"]})
 
-        if skipped:
-            print(f"[warn] {skipped} records skipped (no matching ground-truth).", file=sys.stderr)
+        if skipped and merged:
+            print(f"[warn] {skipped} records skipped (id not found in ground-truth).", file=sys.stderr)
 
-        # Fallback: if no matches found but output has gold fields, use them
+        # Fallback: match by normalized question text when ID matching fails
         if not merged and skipped > 0:
             print(
-                f"[warn] No matching records between output and ground-truth. "
-                f"Checking if output file already contains gold_answers/gold_docs...",
-                file=sys.stderr
+                f"[warn] 0/{len(output_records)} records matched by ID against '{ground_truth_path}'.\n"
+                f"[warn] Falling back to question-text matching (normalized).",
+                file=sys.stderr,
             )
-            # Try to use gold fields from output (if present)
-            if all("gold_answers" in r and "gold_docs" in r for r in output_records):
-                merged = output_records
-                print(f"[info] Using gold fields from output file for {len(merged)} records.", file=sys.stderr)
-            else:
-                raise ValueError(
-                    "No records matched between output and ground-truth file. "
-                    "Either: (1) fix ID mismatch, or (2) ensure output file contains gold_answers/gold_docs fields."
+            # Build question index from ground truth
+            qt_index: dict[str, dict] = {}
+            for gt_rec in gt_records:
+                q = gt_rec.get("question", "")
+                if q:
+                    qt_index[_normalize_question(q)] = gt_rec
+
+            qt_matched = qt_skipped = 0
+            for rec in output_records:
+                q_norm = _normalize_question(rec.get("question", ""))
+                gt = qt_index.get(q_norm)
+                if gt is None:
+                    qt_skipped += 1
+                    continue
+                merged.append({**rec, "gold_answers": gt["gold_answers"], "gold_docs": gt["gold_docs"]})
+                qt_matched += 1
+
+            if merged:
+                print(
+                    f"[info] Question-text matching: {qt_matched} matched, {qt_skipped} skipped.",
+                    file=sys.stderr,
                 )
+            else:
+                print(
+                    f"[warn] Question-text matching also failed ({qt_skipped} skipped).\n"
+                    f"[warn] Reason: output questions do not match ground-truth questions.\n"
+                    f"[warn] Tip: ensure output and ground-truth are from the same dataset.",
+                    file=sys.stderr,
+                )
+                return {"num_examples": 0, "retrieval_overall": {}, "qa_overall": {},
+                        "retrieval_per_example": [], "qa_per_example": []}
     else:
         # Combined format: gold fields already present
         merged = output_records
@@ -326,6 +353,9 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 def _print_summary(result: dict[str, Any]) -> None:
+    if result["num_examples"] == 0:
+        print("[warn] No examples to evaluate — no summary produced.", file=sys.stderr)
+        return
     n = result["num_examples"]
     ret = result["retrieval_overall"]
     qa  = result["qa_overall"]
