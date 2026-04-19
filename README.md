@@ -193,6 +193,37 @@ python scripts/clear_kb_namespace.py \
   --yes
 ```
 
+Optional: uv usage
+```
+uv run main.py --dataset=2wikimultihopqa_first10 --retrieval_recall_k_list '[1, 2, 5, 10, 20, 50]'
+```
+
+### Teleportation Hybrid Retrieval (experimental)
+
+This repository includes an optional retrieval backend that combines:
+
+- offline entity-community partitioning (Leiden),
+- bridge entity/chunk tagging, and
+- online leaky local PPR with threshold-triggered cross-community teleportation.
+
+Enable it from the CLI:
+
+```bash
+uv run main.py \
+  --dataset=2wikimultihopqa_first10 \
+  --ppr_mode teleportation_hybrid \
+  --teleportation_leakage_gamma 0.15 \
+  --teleportation_trigger_threshold 0.003 \
+  --teleportation_home_communities_top_k 2 \
+  --teleportation_max_teleport_steps 3
+```
+
+Tuning guidance:
+
+- Increase `--teleportation_leakage_gamma` to explore cross-community bridges more aggressively.
+- Lower `--teleportation_trigger_threshold` to allow earlier teleports.
+- Increase `--teleportation_home_communities_top_k` if queries have multiple strong semantic anchors.
+
 Optional: if you are using Milvus chunk vectors, you can also drop the corresponding Milvus collection:
 
 ```bash

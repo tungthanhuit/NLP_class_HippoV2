@@ -342,6 +342,60 @@ class BaseConfig:
     damping: float = field(
         default=0.5, metadata={"help": "Damping factor for ppr algorithm."}
     )
+    ppr_mode: Literal["global", "teleportation_hybrid"] = field(
+        default="global",
+        metadata={
+            "help": "PPR backend mode. 'global' runs full-graph personalized PageRank; 'teleportation_hybrid' runs community-local leaky PPR with bridge-triggered teleportation."
+        },
+    )
+    teleportation_leakage_gamma: float = field(
+        default=0.15,
+        metadata={
+            "help": "Leakage coefficient gamma for teleportation_hybrid mode. Higher values move more mass to bridge-boundary transitions."
+        },
+    )
+    teleportation_trigger_threshold: float = field(
+        default=0.003,
+        metadata={
+            "help": "Activation threshold tau for bridge entities to trigger community teleportation."
+        },
+    )
+    teleportation_home_communities_top_k: int = field(
+        default=2,
+        metadata={
+            "help": "Number of initial home communities selected from query anchors in teleportation_hybrid mode."
+        },
+    )
+    teleportation_max_teleport_steps: int = field(
+        default=3,
+        metadata={
+            "help": "Maximum number of cross-community teleport expansions per query in teleportation_hybrid mode."
+        },
+    )
+    teleportation_max_iterations: int = field(
+        default=50,
+        metadata={
+            "help": "Maximum sparse power-iteration steps for teleportation_hybrid mode."
+        },
+    )
+    teleportation_tolerance: float = field(
+        default=1e-6,
+        metadata={
+            "help": "Convergence tolerance for sparse power iteration in teleportation_hybrid mode."
+        },
+    )
+    teleportation_bridge_betweenness_quantile: float = field(
+        default=0.95,
+        metadata={
+            "help": "Quantile for selecting high-betweenness entity bridges during offline partitioning (0-1)."
+        },
+    )
+    teleportation_min_bridge_entities_per_chunk: int = field(
+        default=2,
+        metadata={
+            "help": "Minimum number of bridge entities in a chunk to tag it as a bridge chunk."
+        },
+    )
 
     # QA specific attributes
     max_qa_steps: int = field(

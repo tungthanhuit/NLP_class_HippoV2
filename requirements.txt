@@ -17,7 +17,9 @@ tiktoken==0.7.0
 nest_asyncio
 python-dotenv==1.2.2
 numpy
+scipy
 tqdm
 pyarrow
 neo4j==5.28.3
 pymilvus==2.6.12
+python-dotenv

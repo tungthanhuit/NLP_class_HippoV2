@@ -28,6 +28,7 @@ setuptools.setup(
         "tenacity==8.5.0",
         "neo4j==5.28.3",
         "pymilvus==2.6.12",
+        "scipy",
         "tqdm",  # No version specified
     ],
 )

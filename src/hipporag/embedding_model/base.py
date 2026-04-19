@@ -1,4 +1,5 @@
 import json
+import sys
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Any, Dict, List
 import numpy as np
@@ -237,28 +238,70 @@ class BaseEmbeddingModel:
 class EmbeddingCache:
     """A multiprocessing-safe global cache for storing embeddings."""
 
-    _manager = multiprocessing.Manager()
-    _cache = _manager.dict()  # Shared dictionary for multiprocessing
+    _manager = None
+    _cache = {}
     _lock = threading.Lock()  # Thread-safe lock for concurrent access
+    _initialized = False
+    _using_manager = False
+
+    @classmethod
+    def ensure_initialized(cls):
+        """Initialize the multiprocessing manager and cache if not already done."""
+        if cls._initialized:
+            return
+
+        with cls._lock:  # Ensure that only one thread initializes the manager
+            if cls._initialized:  # Double-check locking
+                return
+
+            can_start_manager = (
+                sys.platform != "darwin"
+                and multiprocessing.current_process().name == "MainProcess"
+                and threading.current_thread() is threading.main_thread()
+            )
+
+            if can_start_manager:
+                try:
+                    cls._manager = multiprocessing.Manager()
+                    cls._cache = cls._manager.dict()  # Shared dictionary for embeddings
+                    cls._using_manager = True
+                except Exception as e:
+                    logger.warning(
+                        f"EmbeddingCache falling back to local thread-safe cache: {e}"
+                    )
+                    cls._manager = None
+                    cls._cache = {}
+                    cls._using_manager = False
+            else:
+                # Starting multiprocessing.Manager from non-main process/thread is fragile.
+                cls._manager = None
+                cls._cache = {}
+                cls._using_manager = False
+
+            cls._initialized = True
 
     @classmethod
     def get(cls, content):
         """Retrieve the embedding if cached."""
+        cls.ensure_initialized()
         return cls._cache.get(content)
 
     @classmethod
     def set(cls, content, embedding):
         """Store an embedding in the cache."""
+        cls.ensure_initialized()
         with cls._lock:  # Ensures thread safety
             cls._cache[content] = embedding
 
     @classmethod
     def contains(cls, content):
         """Check if the embedding exists in cache."""
+        cls.ensure_initialized()
         return content in cls._cache
 
     @classmethod
     def clear(cls):
         """Clear the entire cache."""
+        cls.ensure_initialized()
         with cls._lock:
             cls._cache.clear()

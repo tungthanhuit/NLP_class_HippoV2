@@ -61,6 +61,8 @@ class MilvusVectorStore:
 
         self._collection = None
         self._dim: Optional[int] = None
+        self._supports_upsert: Optional[bool] = None
+        self._server_version: Optional[str] = None
 
         try:
             from pymilvus import connections
@@ -91,9 +93,34 @@ class MilvusVectorStore:
         except Exception as e:
             raise RuntimeError(f"Failed connecting to Milvus at {self.cfg.milvus_uri}: {e}")
 
+        self._detect_server_capabilities()
+
     @property
     def _alias(self) -> str:
         return f"hipporag_{self.collection_name}"
+
+    def _detect_server_capabilities(self) -> None:
+        # Older Milvus releases (notably 2.2.x) do not support Upsert RPC.
+        try:
+            from pymilvus import utility
+
+            ver = str(utility.get_server_version(using=self._alias) or "")
+            self._server_version = ver
+            m = re.match(r"^(\d+)\.(\d+)", ver)
+            if not m:
+                return
+
+            major = int(m.group(1))
+            minor = int(m.group(2))
+            if major < 2 or (major == 2 and minor <= 2):
+                self._supports_upsert = False
+                logger.info(
+                    "Milvus server version '%s' lacks Upsert RPC; using delete+insert compatibility mode for '%s'",
+                    ver,
+                    self.collection_name,
+                )
+        except Exception:
+            logger.debug("Could not determine Milvus server version", exc_info=True)
 
     def _get_collection(self):
         if self._collection is not None:
@@ -191,6 +218,25 @@ class MilvusVectorStore:
             logger.debug("Milvus count failed", exc_info=True)
             return 0
 
+    def _is_upsert_unimplemented_error(self, err: Exception) -> bool:
+        # Older Milvus servers (e.g. 2.2.x) do not implement Upsert RPC.
+        msg = str(err).lower()
+        if "unknown method upsert" in msg:
+            return True
+        if "statuscode.unimplemented" in msg and "upsert" in msg:
+            return True
+
+        code_fn = getattr(err, "code", None)
+        if callable(code_fn):
+            try:
+                code_str = str(code_fn()).lower()
+                if "unimplemented" in code_str:
+                    return True
+            except Exception:
+                pass
+
+        return False
+
     def upsert(self, ids: List[str], vectors: np.ndarray, batch_size: int = 512) -> None:
         if not ids:
             return
@@ -224,13 +270,26 @@ class MilvusVectorStore:
             vec_batch = vectors[start : start + batch_size]
             vec_list = vec_batch.tolist()
             data = [id_batch, vec_list]
+
             try:
-                if hasattr(col, "upsert"):
-                    col.upsert(data)
-                else:
-                    # Fallback: delete then insert.
-                    self.delete(list(id_batch))
-                    col.insert(data)
+                if self._supports_upsert is not False and hasattr(col, "upsert"):
+                    try:
+                        col.upsert(data)
+                        self._supports_upsert = True
+                        continue
+                    except Exception as upsert_err:
+                        if self._is_upsert_unimplemented_error(upsert_err):
+                            self._supports_upsert = False
+                            logger.warning(
+                                "Milvus server for '%s' does not support Upsert RPC; using delete+insert compatibility mode",
+                                self.collection_name,
+                            )
+                        else:
+                            raise
+
+                # Compatibility fallback: emulate upsert semantics.
+                self.delete(list(id_batch))
+                col.insert(data)
             except Exception:
                 logger.exception("Milvus upsert/insert failed")
                 raise

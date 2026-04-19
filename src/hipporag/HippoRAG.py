@@ -19,6 +19,7 @@ from .evaluation.qa_eval import QAExactMatch, QAF1Score
 from .prompts.linking import get_query_instruction
 from .prompts.prompt_template_manager import PromptTemplateManager
 from .rerank import DSPyFilter
+from .teleportation_hybrid import TeleportationHybridIndex
 from .utils.misc_utils import *
 from .utils.misc_utils import NerRawOutput, TripleRawOutput
 from .utils.embed_utils import retrieve_knn
@@ -273,6 +274,8 @@ class HippoRAG:
         self.all_retrieval_time = 0
 
         self.ent_node_to_chunk_ids = None
+        self._teleportation_index = None
+        self._last_teleportation_meta = {}
 
     def initialize_graph(self):
         """
@@ -1851,6 +1854,7 @@ class HippoRAG:
             self.ent_node_to_chunk_ids = {}
             self.add_fact_edges(self.passage_node_keys, chunk_triples)
 
+        self._prepare_teleportation_hybrid_index()
         self.ready_to_retrieve = True
 
     def _prepare_retrieval_objects_neo4j(self):
@@ -1941,8 +1945,32 @@ class HippoRAG:
                             set([doc["idx"]])
                         )
                     )
+        self._prepare_teleportation_hybrid_index()
 
         self.ready_to_retrieve = True
+
+    def _prepare_teleportation_hybrid_index(self):
+        self._teleportation_index = None
+        self._last_teleportation_meta = {}
+
+        if getattr(self.global_config, "ppr_mode", "global") != "teleportation_hybrid":
+            return
+
+        try:
+            self._teleportation_index = TeleportationHybridIndex.build(
+                graph=self.graph,
+                node_name_to_vertex_idx=self.node_name_to_vertex_idx,
+                entity_node_keys=self.entity_node_keys,
+                passage_node_keys=self.passage_node_keys,
+                ent_node_to_chunk_ids=self.ent_node_to_chunk_ids or {},
+                bridge_betweenness_quantile=self.global_config.teleportation_bridge_betweenness_quantile,
+                min_bridge_entities_per_chunk=self.global_config.teleportation_min_bridge_entities_per_chunk,
+            )
+        except Exception:
+            logger.exception(
+                "Failed building teleportation hybrid index. Falling back to global PPR."
+            )
+            self._teleportation_index = None
 
     def get_query_embeddings(self, queries: List[str] | List[QuerySolution]):
         """
@@ -2415,6 +2443,53 @@ class HippoRAG:
         if damping is None:
             damping = 0.5  # for potential compatibility
         reset_prob = np.where(np.isnan(reset_prob) | (reset_prob < 0), 0, reset_prob)
+
+        num_nodes = self.graph.vcount()
+        num_edges = self.graph.ecount()
+        logger.info(
+            "[PPR] matrix_shape=(%d, %d), edges=%d, reset_shape=%s, reset_nonzero=%d, damping=%.3f",
+            num_nodes,
+            num_nodes,
+            num_edges,
+            tuple(reset_prob.shape),
+            int(np.count_nonzero(reset_prob)),
+            float(damping),
+        )
+
+        if getattr(self.global_config, "ppr_mode", "global") == "teleportation_hybrid":
+            if self._teleportation_index is None:
+                self._prepare_teleportation_hybrid_index()
+
+            if self._teleportation_index is not None:
+                hybrid_scores, run_meta = self._teleportation_index.run(
+                    reset_prob=reset_prob,
+                    damping=damping,
+                    leakage_gamma=self.global_config.teleportation_leakage_gamma,
+                    home_communities_top_k=self.global_config.teleportation_home_communities_top_k,
+                    teleport_threshold=self.global_config.teleportation_trigger_threshold,
+                    max_teleport_steps=self.global_config.teleportation_max_teleport_steps,
+                    max_iterations=self.global_config.teleportation_max_iterations,
+                    tolerance=self.global_config.teleportation_tolerance,
+                )
+                self._last_teleportation_meta = run_meta
+                logger.info(
+                    "[TeleportPPR] iterations=%d teleports=%d active_communities=%d",
+                    int(run_meta.get("iterations", 0)),
+                    int(run_meta.get("teleports", 0)),
+                    int(run_meta.get("active_communities", 0)),
+                )
+
+                doc_scores = np.array(
+                    [hybrid_scores[idx] for idx in self.passage_node_idxs]
+                )
+                sorted_doc_ids = np.argsort(doc_scores)[::-1]
+                sorted_doc_scores = doc_scores[sorted_doc_ids.tolist()]
+                return sorted_doc_ids, sorted_doc_scores
+
+            logger.warning(
+                "ppr_mode='teleportation_hybrid' requested but index is unavailable. Falling back to global PPR."
+            )
+
         pagerank_scores = self.graph.personalized_pagerank(
             vertices=range(len(self.node_name_to_vertex_idx)),
             damping=damping,

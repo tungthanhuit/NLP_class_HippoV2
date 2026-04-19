@@ -1,10 +1,12 @@
 import os
 from typing import List, Optional
 import json
+import time
 
 from src.hipporag.HippoRAG import HippoRAG
 from src.hipporag.utils.misc_utils import string_to_bool
 from src.hipporag.utils.config_utils import BaseConfig
+from src.hipporag.evaluation.qa_eval import QAExactMatch, QAF1Score
 
 import argparse
 
@@ -89,6 +91,52 @@ def get_gold_answers(samples):
         gold_answers.append(gold_ans)
 
     return gold_answers
+
+
+def log_retriever_response(
+    retrieval_results,
+    logger: logging.Logger,
+    top_k: int = 3,
+    preview_chars: int = 180,
+):
+    top_k = max(0, int(top_k))
+    preview_chars = max(0, int(preview_chars))
+    if top_k == 0:
+        return
+
+    for q_idx, retrieval_result in enumerate(retrieval_results):
+        previews = []
+        docs = retrieval_result.docs or []
+        scores = retrieval_result.doc_scores
+        limit = min(top_k, len(docs))
+        for i in range(limit):
+            doc_text = docs[i]
+            title, _, body = doc_text.partition("\n")
+            snippet = body.replace("\n", " ").strip()
+            if preview_chars > 0:
+                snippet = snippet[:preview_chars]
+
+            score = None
+            if scores is not None and len(scores) > i:
+                try:
+                    score = float(scores[i])
+                except Exception:
+                    score = None
+
+            previews.append(
+                {
+                    "rank": i + 1,
+                    "score": score,
+                    "title": title,
+                    "snippet": snippet,
+                }
+            )
+
+        logger.info(
+            "[Retriever Response][Q%d] %s",
+            q_idx,
+            json.dumps(previews, ensure_ascii=False),
+        )
 
 
 def main():
@@ -215,6 +263,109 @@ def main():
             "Example: '1,2,5,10,20,50'. If omitted, uses defaults (auto-clipped to retrieved size)."
         ),
     )
+    parser.add_argument(
+        "--ppr_mode",
+        choices=["global", "teleportation_hybrid"],
+        default="global",
+        help=(
+            "PPR backend mode. 'global' runs full-graph PPR. "
+            "'teleportation_hybrid' uses community-local leaky PPR with bridge-triggered expansion."
+        ),
+    )
+    parser.add_argument(
+        "--teleportation_leakage_gamma",
+        type=float,
+        default=0.15,
+        help="Leakage coefficient gamma for teleportation_hybrid mode.",
+    )
+    parser.add_argument(
+        "--teleportation_trigger_threshold",
+        type=float,
+        default=0.003,
+        help="Bridge activation threshold tau for teleportation triggers.",
+    )
+    parser.add_argument(
+        "--teleportation_home_communities_top_k",
+        type=int,
+        default=2,
+        help="Initial number of active home communities in teleportation_hybrid mode.",
+    )
+    parser.add_argument(
+        "--teleportation_max_teleport_steps",
+        type=int,
+        default=3,
+        help="Maximum number of community teleport expansions per query.",
+    )
+    parser.add_argument(
+        "--teleportation_max_iterations",
+        type=int,
+        default=50,
+        help="Maximum sparse power-iteration steps for teleportation_hybrid mode.",
+    )
+    parser.add_argument(
+        "--teleportation_tolerance",
+        type=float,
+        default=1e-6,
+        help="Convergence tolerance for teleportation_hybrid sparse PPR.",
+    )
+    parser.add_argument(
+        "--teleportation_bridge_betweenness_quantile",
+        type=float,
+        default=0.95,
+        help="Betweenness quantile (0-1) for tagging additional bridge entities.",
+    )
+    parser.add_argument(
+        "--teleportation_min_bridge_entities_per_chunk",
+        type=int,
+        default=2,
+        help="Minimum bridge entities in a chunk to mark it as a bridge chunk.",
+    )
+    parser.add_argument(
+        "--sample_index",
+        type=int,
+        default=None,
+        help=(
+            "If provided, run retrieval+QA for a single sample index from the dataset "
+            "(0-based). Useful for pipeline debugging."
+        ),
+    )
+    parser.add_argument(
+        "--log_level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Python logging level.",
+    )
+    parser.add_argument(
+        "--allow_milvus_fallback_for_debug",
+        type=str,
+        default="true",
+        help=(
+            "If true, automatically fall back to chunk_vector_backend='default' "
+            "when Milvus is unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--quiet_external_logs",
+        type=str,
+        default="true",
+        help=(
+            "If true, silence noisy third-party loggers (neo4j, pymilvus, httpx, etc.) "
+            "to focus on HippoRAG pipeline logs."
+        ),
+    )
+    parser.add_argument(
+        "--retrieval_log_top_k",
+        type=int,
+        default=3,
+        help="Number of top retrieved passages to print per query in retrieval logs.",
+    )
+    parser.add_argument(
+        "--retrieval_log_preview_chars",
+        type=int,
+        default=180,
+        help="Preview length (chars) for each retrieved passage snippet in retrieval logs.",
+    )
     args = parser.parse_args()
 
     dataset_name = args.dataset
@@ -239,6 +390,8 @@ def main():
 
     force_index_from_scratch = string_to_bool(args.force_index_from_scratch)
     force_openie_from_scratch = string_to_bool(args.force_openie_from_scratch)
+    allow_milvus_fallback_for_debug = string_to_bool(args.allow_milvus_fallback_for_debug)
+    quiet_external_logs = string_to_bool(args.quiet_external_logs)
 
     neo4j_namespace_include_llm = string_to_bool(args.neo4j_namespace_include_llm)
     neo4j_namespace = (args.neo4j_namespace or os.getenv("NEO4J_NAMESPACE") or "hipporag").strip()
@@ -270,6 +423,14 @@ def main():
 
     # Prepare datasets and evaluation
     samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
+
+    if args.sample_index is not None:
+        if args.sample_index < 0 or args.sample_index >= len(samples):
+            parser.error(
+                f"--sample_index must be within [0, {len(samples) - 1}] for dataset {dataset_name}."
+            )
+        samples = [samples[args.sample_index]]
+
     all_queries = [s["question"] for s in samples]
 
     gold_answers = get_gold_answers(samples)
@@ -311,16 +472,125 @@ def main():
         max_new_tokens=None,
         corpus_len=len(corpus),
         openie_mode=args.openie_mode,
+        ppr_mode=args.ppr_mode,
+        teleportation_leakage_gamma=args.teleportation_leakage_gamma,
+        teleportation_trigger_threshold=args.teleportation_trigger_threshold,
+        teleportation_home_communities_top_k=args.teleportation_home_communities_top_k,
+        teleportation_max_teleport_steps=args.teleportation_max_teleport_steps,
+        teleportation_max_iterations=args.teleportation_max_iterations,
+        teleportation_tolerance=args.teleportation_tolerance,
+        teleportation_bridge_betweenness_quantile=args.teleportation_bridge_betweenness_quantile,
+        teleportation_min_bridge_entities_per_chunk=args.teleportation_min_bridge_entities_per_chunk,
+    )
+    config.retrieval_log_top_k = max(0, int(args.retrieval_log_top_k))
+    config.retrieval_log_preview_chars = max(0, int(args.retrieval_log_preview_chars))
+
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        force=True,
     )
 
-    logging.basicConfig(level=logging.INFO)
+    if quiet_external_logs:
+        noisy_logger_names = [
+            "neo4j",
+            "neo4j.io",
+            "neo4j.pool",
+            "pymilvus",
+            "grpc",
+            "httpx",
+            "openai",
+            "urllib3",
+        ]
+        for name in noisy_logger_names:
+            logging.getLogger(name).setLevel(logging.WARNING)
 
-    hipporag = HippoRAG(global_config=config)
+    logger = logging.getLogger(__name__)
+    logger.info("Loaded %d query sample(s) from dataset '%s'", len(samples), dataset_name)
+    logger.info(
+        "Focused retrieval logs: top_k=%d, preview_chars=%d",
+        config.retrieval_log_top_k,
+        config.retrieval_log_preview_chars,
+    )
+    if args.sample_index is not None:
+        logger.info("Running in single-sample mode with sample_index=%d", args.sample_index)
+        logger.debug("Selected question: %s", all_queries[0])
 
+    try:
+        hipporag = HippoRAG(global_config=config)
+    except RuntimeError as e:
+        err_msg = str(e).lower()
+        should_fallback = (
+            allow_milvus_fallback_for_debug
+            and args.chunk_vector_backend == "milvus"
+            and ("failed connecting to milvus" in err_msg or "milvusexception" in err_msg)
+        )
+        if not should_fallback:
+            raise
+
+        logger.warning(
+            "Milvus is unavailable. "
+            "Falling back to chunk_vector_backend='default' (Neo4j chunk vectors)."
+        )
+        config.chunk_vector_backend = "default"
+        hipporag = HippoRAG(global_config=config)
+
+    # Step 1: indexing
+    pipeline_start = time.time()
+    index_start = time.time()
     hipporag.index(docs)
+    index_time = time.time() - index_start
+    logger.info("[Timing] index=%.3fs", index_time)
 
-    # Retrieval and QA
-    hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers)
+    # Step 2: retrieval
+    retrieval_start = time.time()
+    if gold_docs is not None:
+        retrieval_results, overall_retrieval_result = hipporag.retrieve(
+            queries=all_queries,
+            gold_docs=gold_docs,
+        )
+        logger.info("[Retrieval Eval] %s", overall_retrieval_result)
+    else:
+        retrieval_results = hipporag.retrieve(queries=all_queries)
+    retrieval_time = time.time() - retrieval_start
+    logger.info("[Timing] retrieval=%.3fs", retrieval_time)
+
+    # Focused retriever output for debugging
+    log_retriever_response(
+        retrieval_results,
+        logger,
+        top_k=config.retrieval_log_top_k,
+        preview_chars=config.retrieval_log_preview_chars,
+    )
+
+    # Step 3: QA generation
+    qa_start = time.time()
+    queries_solutions, all_response_message, all_metadata = hipporag.qa(retrieval_results)
+    qa_time = time.time() - qa_start
+    logger.info("[Timing] qa_generation=%.3fs", qa_time)
+
+    # Optional QA evaluation (kept for parity with previous rag_qa flow)
+    if gold_answers is not None:
+        qa_em_evaluator = QAExactMatch(global_config=config)
+        qa_f1_evaluator = QAF1Score(global_config=config)
+        overall_qa_em_result, _ = qa_em_evaluator.calculate_metric_scores(
+            gold_answers=gold_answers,
+            predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+            aggregation_fn=max,
+        )
+        overall_qa_f1_result, _ = qa_f1_evaluator.calculate_metric_scores(
+            gold_answers=gold_answers,
+            predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+            aggregation_fn=max,
+        )
+        overall_qa_results = {**overall_qa_em_result, **overall_qa_f1_result}
+        overall_qa_results = {
+            k: round(float(v), 4) for k, v in overall_qa_results.items()
+        }
+        logger.info("[QA Eval] %s", overall_qa_results)
+
+    logger.info("[Timing] total_pipeline=%.3fs", time.time() - pipeline_start)
 
 
 if __name__ == "__main__":
