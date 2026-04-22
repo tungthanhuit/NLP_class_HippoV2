@@ -10,7 +10,7 @@ from src.hipporag.evaluation.qa_eval import QAExactMatch, QAF1Score
 
 import argparse
 
-# os.environ["LOG_LEVEL"] = "DEBUG"
+os.environ["LOG_LEVEL"] = "DEBUG"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -366,6 +366,34 @@ def main():
         default=180,
         help="Preview length (chars) for each retrieved passage snippet in retrieval logs.",
     )
+    parser.add_argument(
+        "--pipeline_mode",
+        choices=["full", "index_only", "retrieve_qa_only"],
+        default="full",
+        help=(
+            "Pipeline execution mode. 'full' runs indexing+retrieval+QA, "
+            "'index_only' only builds/updates KG index, "
+            "'retrieve_qa_only' skips indexing and runs retrieval+QA on existing DB/index."
+        ),
+    )
+    parser.add_argument(
+        "--query_text",
+        type=str,
+        default=None,
+        help=(
+            "Single ad-hoc query string for retrieval+QA. "
+            "If provided, overrides dataset query samples."
+        ),
+    )
+    parser.add_argument(
+        "--queries_json_path",
+        type=str,
+        default=None,
+        help=(
+            "Path to a JSON file containing a list of query strings. "
+            "If provided, overrides dataset query samples."
+        ),
+    )
     args = parser.parse_args()
 
     dataset_name = args.dataset
@@ -421,26 +449,47 @@ def main():
                     "--retrieval_recall_k_list must be a comma-separated list like '1,2,5,10' or a quoted JSON list like '[1,2,5,10]'."
                 )
 
-    # Prepare datasets and evaluation
-    samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
+    # Prepare datasets/queries and evaluation labels.
+    samples = None
+    all_queries = []
+    gold_answers = None
+    gold_docs = None
 
-    if args.sample_index is not None:
-        if args.sample_index < 0 or args.sample_index >= len(samples):
-            parser.error(
-                f"--sample_index must be within [0, {len(samples) - 1}] for dataset {dataset_name}."
-            )
-        samples = [samples[args.sample_index]]
+    if args.query_text and args.queries_json_path:
+        parser.error("Use only one of --query_text or --queries_json_path, not both.")
 
-    all_queries = [s["question"] for s in samples]
+    if args.query_text:
+        all_queries = [args.query_text]
+    elif args.queries_json_path:
+        with open(args.queries_json_path, "r") as f:
+            loaded_queries = json.load(f)
+        if not isinstance(loaded_queries, list) or not all(
+            isinstance(q, str) for q in loaded_queries
+        ):
+            parser.error("--queries_json_path must point to a JSON list of strings.")
+        all_queries = loaded_queries
+    else:
+        samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
 
-    gold_answers = get_gold_answers(samples)
-    try:
-        gold_docs = get_gold_docs(samples, dataset_name)
-        assert (
-            len(all_queries) == len(gold_docs) == len(gold_answers)
-        ), "Length of queries, gold_docs, and gold_answers should be the same."
-    except Exception:
-        gold_docs = None
+        if args.sample_index is not None:
+            if args.sample_index < 0 or args.sample_index >= len(samples):
+                parser.error(
+                    f"--sample_index must be within [0, {len(samples) - 1}] for dataset {dataset_name}."
+                )
+            samples = [samples[args.sample_index]]
+
+        all_queries = [s["question"] for s in samples]
+        gold_answers = get_gold_answers(samples)
+        try:
+            gold_docs = get_gold_docs(samples, dataset_name)
+            assert (
+                len(all_queries) == len(gold_docs) == len(gold_answers)
+            ), "Length of queries, gold_docs, and gold_answers should be the same."
+        except Exception:
+            gold_docs = None
+
+    if len(all_queries) == 0 and args.pipeline_mode != "index_only":
+        parser.error("No queries provided. Use dataset queries, --query_text, or --queries_json_path.")
 
     config = BaseConfig(
         save_dir=save_dir,
@@ -507,13 +556,18 @@ def main():
             logging.getLogger(name).setLevel(logging.WARNING)
 
     logger = logging.getLogger(__name__)
-    logger.info("Loaded %d query sample(s) from dataset '%s'", len(samples), dataset_name)
+    if samples is None:
+        logger.info("Loaded %d ad-hoc query sample(s)", len(all_queries))
+    else:
+        logger.info(
+            "Loaded %d query sample(s) from dataset '%s'", len(samples), dataset_name
+        )
     logger.info(
         "Focused retrieval logs: top_k=%d, preview_chars=%d",
         config.retrieval_log_top_k,
         config.retrieval_log_preview_chars,
     )
-    if args.sample_index is not None:
+    if args.sample_index is not None and len(all_queries) > 0:
         logger.info("Running in single-sample mode with sample_index=%d", args.sample_index)
         logger.debug("Selected question: %s", all_queries[0])
 
@@ -536,14 +590,22 @@ def main():
         config.chunk_vector_backend = "default"
         hipporag = HippoRAG(global_config=config)
 
-    # Step 1: indexing
     pipeline_start = time.time()
-    index_start = time.time()
-    hipporag.index(docs)
-    index_time = time.time() - index_start
-    logger.info("[Timing] index=%.3fs", index_time)
+    if args.pipeline_mode in ("full", "index_only"):
+        index_start = time.time()
+        hipporag.index(docs)
+        index_time = time.time() - index_start
+        logger.info("[Timing] index=%.3fs", index_time)
+        if args.pipeline_mode == "index_only":
+            logger.info("Pipeline mode 'index_only' completed. Skipping retrieval+QA.")
+            logger.info("[Timing] total_pipeline=%.3fs", time.time() - pipeline_start)
+            return
+    else:
+        logger.info(
+            "Pipeline mode 'retrieve_qa_only': skipping indexing and reusing existing DB/index."
+        )
 
-    # Step 2: retrieval
+    # Retrieval
     retrieval_start = time.time()
     if gold_docs is not None:
         retrieval_results, overall_retrieval_result = hipporag.retrieve(
@@ -564,9 +626,9 @@ def main():
         preview_chars=config.retrieval_log_preview_chars,
     )
 
-    # Step 3: QA generation
+    # QA generation
     qa_start = time.time()
-    queries_solutions, all_response_message, all_metadata = hipporag.qa(retrieval_results)
+    queries_solutions, _, _ = hipporag.qa(retrieval_results)
     qa_time = time.time() - qa_start
     logger.info("[Timing] qa_generation=%.3fs", qa_time)
 

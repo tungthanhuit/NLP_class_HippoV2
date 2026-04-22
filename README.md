@@ -16,27 +16,20 @@ Our experiments show that HippoRAG 2 improves associativity (multi-hop retrieval
 
 Like its predecessor, HippoRAG 2 remains cost and latency efficient in online processes, while using significantly fewer resources for offline indexing compared to other graph-based solutions such as GraphRAG, RAPTOR, and LightRAG.
 
-<p align="center">
-  <img align="center" src="https://github.com/OSU-NLP-Group/HippoRAG/raw/main/images/intro.png" />
-</p>
-<p align="center">
-  <b>Figure 1:</b> Evaluation of continual learning capabilities across three key dimensions: factual memory (NaturalQuestions, PopQA), sense-making (NarrativeQA), and associativity (MuSiQue, 2Wiki, HotpotQA, and LV-Eval). HippoRAG 2 surpasses other methods across all
-categories, bringing it one step closer to true long-term memory.
-</p>
 
-<p align="center">
-  <img align="center" src="https://github.com/OSU-NLP-Group/HippoRAG/raw/main/images/methodology.png" />
-</p>
-<p align="center">
-  <b>Figure 2:</b> HippoRAG 2 methodology.
-</p>
+
+**Figure 1:** Evaluation of continual learning capabilities across three key dimensions: factual memory (NaturalQuestions, PopQA), sense-making (NarrativeQA), and associativity (MuSiQue, 2Wiki, HotpotQA, and LV-Eval). HippoRAG 2 surpasses other methods across all categories, bringing it one step closer to true long-term memory.
+
+
+
+**Figure 2:** HippoRAG 2 methodology.
 
 #### Check out our papers to learn more:
 
-* [**HippoRAG: Neurobiologically Inspired Long-Term Memory for Large Language Models**](https://arxiv.org/abs/2405.14831) [NeurIPS '24].
-* [**From RAG to Memory: Non-Parametric Continual Learning for Large Language Models**](https://arxiv.org/abs/2502.14802) [ICML '25].
+- **[HippoRAG: Neurobiologically Inspired Long-Term Memory for Large Language Models](https://arxiv.org/abs/2405.14831)** [NeurIPS '24].
+- **[From RAG to Memory: Non-Parametric Continual Learning for Large Language Models](https://arxiv.org/abs/2502.14802)** [ICML '25].
 
-----
+---
 
 ## Installation
 
@@ -65,6 +58,7 @@ conda create -n hipporag python=3.10
 conda activate hipporag
 pip install hipporag
 ```
+
 Initialize the environmental variables and activate the environment:
 
 ```sh
@@ -131,6 +125,7 @@ rag_results = hipporag.rag_qa(queries=queries)
 By default, HippoRAG persists its KB locally (Parquet embeddings + `graph.pickle` + OpenIE JSON). You can switch persistence to Neo4j for both indexing and inference by setting `kb_backend="neo4j"` in `BaseConfig`.
 
 Prereqs:
+
 - Neo4j 5.26.24 running (for example, via local Docker) and reachable at `neo4j_uri`.
 - Set `NEO4J_PASSWORD` (or pass `neo4j_password` in config).
 
@@ -152,6 +147,7 @@ and keep these stable across runs:
 - `embedding_model_name` (embedding dimensionality must match)
 
 Notes:
+
 - The KB contents (e.g., OpenIE triples) come from the LLM used during indexing. If you change LLM later while reusing the KB, you are changing *inference behavior* (QA/rerank), not rebuilding the KB.
 - If you use Milvus (`chunk_vector_backend="milvus"`), the Milvus collection name follows the same effective namespace.
 
@@ -171,14 +167,17 @@ To delete **all** nodes/relationships for a namespace (including stored embeddin
 ```bash
 # Dry-run (prints what would be deleted)
 python scripts/clear_kb_namespace.py \
-  --neo4j-password "$NEO4J_PASSWORD" \
-  --namespace <EFFECTIVE_NAMESPACE>
+--neo4j-password "$NEO4J_PASSWORD" \
+--namespace <EFFECTIVE_NAMESPACE>
+```
 
 # Execute deletion
+
+```bash
 python scripts/clear_kb_namespace.py \
-  --neo4j-password "$NEO4J_PASSWORD" \
-  --namespace <EFFECTIVE_NAMESPACE> \
-  --yes
+--neo4j-password "$NEO4J_PASSWORD" \
+--namespace <EFFECTIVE_NAMESPACE> \
+--yes
 ```
 
 If you don't know the *effective* namespace string, the script can compute it using the same rule as `HippoRAG`:
@@ -194,6 +193,7 @@ python scripts/clear_kb_namespace.py \
 ```
 
 Optional: uv usage
+
 ```
 uv run main.py --dataset=2wikimultihopqa_first10 --retrieval_recall_k_list '[1, 2, 5, 10, 20, 50]'
 ```
@@ -256,6 +256,7 @@ python tests_neo4j.py
 ```
 
 Requirements:
+
 - Install `pymilvus` (see `requirements.txt`).
 - Run Milvus locally and make it reachable at `MILVUS_URI`. For Docker on Linux, Milvus provides a standalone launch script that starts a container named `milvus` on port `19530`:
 
@@ -328,8 +329,8 @@ hipporag = HippoRAG(
 
 #### Example (OpenAI Compatible Embeddings)
 
-If you want to use LLMs and Embeddings Compatible to OpenAI, please use the following methods.</p>
-    
+If you want to use LLMs and Embeddings Compatible to OpenAI, please use the following methods.
+
 ```python
 hipporag = HippoRAG(save_dir=save_dir, 
     llm_model_name='Your LLM Model name',
@@ -343,7 +344,6 @@ hipporag = HippoRAG(save_dir=save_dir,
 This example illustrates how to use `hipporag` with any locally deployed **OpenAI-compatible** server (or proxy) for chat and/or embeddings.
 
 1. Start your server/proxy so it exposes OpenAI-style routes under `/v1` (e.g., `http://localhost:6578/v1` or `http://localhost:4000/v1`).
-
 2. Point HippoRAG to it via `llm_base_url` (and optionally `embedding_base_url`):
 
 ```python
@@ -537,6 +537,67 @@ python main.py \
 In this codebase, OpenIE currently runs in **online** mode via the configured OpenAI-compatible LLM API.
 `--openie_mode offline` is not supported in the current implementation and will raise an error.
 
+### Split offline indexing from online retrieval/QA
+
+`main.py` now supports running KG construction separately from retrieval/generation via `--pipeline_mode`.
+
+#### A) Build/update KG once (offline indexing only)
+
+```sh
+dataset=sample
+python main.py \
+  --dataset "$dataset" \
+  --pipeline_mode index_only \
+  --llm_base_url http://localhost:4000/v1 \
+  --llm_name gpt-4o-mini \
+  --embedding_name text-embedding-3-small
+```
+
+#### B) Serve requests with existing KG (no rebuild)
+
+Single query:
+
+```sh
+dataset=sample
+python main.py \
+  --dataset "$dataset" \
+  --pipeline_mode retrieve_qa_only \
+  --query_text "Who wrote The Hobbit?" \
+  --llm_base_url http://localhost:4000/v1 \
+  --llm_name gpt-4o-mini \
+  --embedding_name text-embedding-3-small
+```
+
+Batch queries from JSON (must be a JSON list of strings):
+
+```sh
+dataset=sample
+python main.py \
+  --dataset "$dataset" \
+  --pipeline_mode retrieve_qa_only \
+  --queries_json_path reproduce/dataset/test_queries.json \
+  --llm_base_url http://localhost:4000/v1 \
+  --llm_name gpt-4o-mini \
+  --embedding_name text-embedding-3-small
+```
+
+```sh
+# Build KG once:
+uv run main.py --dataset musique --pipeline_mode index_only
+
+# Serve/query without rebuilding:
+uv run main.py --dataset musique --pipeline_mode retrieve_qa_only --query_text "Who wrote The Hobbit?"
+
+# Batch request-time queries:
+uv run main.py --dataset musique --pipeline_mode retrieve_qa_only --queries_json_path queries.json
+```
+
+Notes:
+
+- Keep namespace/backend settings stable across runs to reuse the same stored KG (`--neo4j_namespace`, `--neo4j_namespace_include_llm`, `--embedding_name`, backend flags).
+- `--ppr_mode global` and `--ppr_mode teleportation_hybrid` can both run against the same constructed KG.
+- Use `--force_index_from_scratch true` only when you intentionally want to rebuild.
+
 ## Debugging Note
 
 - `/reproduce/dataset/sample.json` is a small dataset specifically for debugging.
@@ -549,10 +610,14 @@ rm -rf outputs/sample/sample_meta-llama_Llama-3.3-70B-Instruct_Transformers_sent
 
 ### Useful `main.py` flags
 
+- `--pipeline_mode full|index_only|retrieve_qa_only`: run full pipeline, only KG construction, or retrieval+QA only
+- `--query_text "<question>"`: run retrieval+QA for one ad-hoc query (no dataset query file needed)
+- `--queries_json_path <path>`: run retrieval+QA for a JSON list of query strings
 - `--force_index_from_scratch true`: rebuild everything (clears Neo4j namespace when using `--kb_backend neo4j`)
 - `--force_openie_from_scratch true`: regenerate OpenIE extractions
 - `--retrieval_recall_k_list '1,2,5,10,20,50'` or `--retrieval_recall_k_list '[1,2,5,10,20,50]'`: control Recall@k evaluation points
 - `--neo4j_namespace <prefix>` and `--neo4j_namespace_include_llm false`: control KB reuse/isolation across runs
+
 ### Custom Datasets
 
 To setup your own custom dataset for evaluation, follow the format and naming convention shown in `reproduce/dataset/sample_corpus.json` (your dataset's name should be followed by `_corpus.json`). If running an experiment with pre-defined questions, organize your query corpus according to the query file `reproduce/dataset/sample.json`, be sure to also follow our naming convention.
@@ -674,6 +739,7 @@ The Ohio State University
 If you find this work useful, please consider citing our papers:
 
 ### HippoRAG 2
+
 ```
 @misc{gutiérrez2025ragmemorynonparametriccontinual,
       title={From RAG to Memory: Non-Parametric Continual Learning for Large Language Models}, 
@@ -695,12 +761,12 @@ If you find this work useful, please consider citing our papers:
       booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems},
       year={2024},
       url={https://openreview.net/forum?id=hkujvAPVsg}
- ```
+```
 
 ## TODO:
 
-- [x] Add support for more embedding models
-- [x] Add support for embedding endpoints
-- [ ] Add support for vector database integration
+- Add support for more embedding models
+- Add support for embedding endpoints
+- Add support for vector database integration
 
 Please feel free to open an issue or PR if you have any questions or suggestions.

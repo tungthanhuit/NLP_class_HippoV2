@@ -77,7 +77,9 @@ class TeleportationHybridIndex:
         self.node_communities = node_communities
         self.bridge_entity_idxs = bridge_entity_idxs
         self.bridge_chunk_idxs = bridge_chunk_idxs
-        self.bridge_entity_to_external_communities = bridge_entity_to_external_communities
+        self.bridge_entity_to_external_communities = (
+            bridge_entity_to_external_communities
+        )
 
         self.stats = stats
         self.num_nodes = stats.num_nodes
@@ -114,12 +116,12 @@ class TeleportationHybridIndex:
             if k in node_name_to_vertex_idx
         ]
 
-        entity_idx_set = set(entity_idxs)
-        entity_idx_to_local = {idx: i for i, idx in enumerate(entity_idxs)}
+        entity_idx_set = set[int](entity_idxs)
+        entity_idx_to_local = {idx: i for i, idx in enumerate[int](entity_idxs)}
 
         # Build entity-only projection edges (undirected, weighted).
-        pair_weight: Dict[Tuple[int, int], float] = defaultdict(float)
-        seen_entity_pairs: Set[Tuple[int, int]] = set()
+        pair_weight: Dict[Tuple[int, int], float] = defaultdict[Tuple[int, int], float](float)
+        seen_entity_pairs: Set[Tuple[int, int]] = set[Tuple[int, int]]()
         for edge in graph.es:
             src, dst = edge.tuple
             if src not in entity_idx_set or dst not in entity_idx_set or src == dst:
@@ -145,7 +147,7 @@ class TeleportationHybridIndex:
 
         entity_graph = ig.Graph(
             n=len(entity_idxs),
-            edges=list(pair_weight.keys()),
+            edges=list[Tuple[int, int]](pair_weight.keys()),
             directed=False,
         )
         if entity_graph.ecount() > 0:
@@ -156,7 +158,7 @@ class TeleportationHybridIndex:
 
         # Leiden over entity projection; fall back to multilevel.
         if entity_graph.ecount() == 0:
-            entity_membership = list(range(entity_graph.vcount()))
+            entity_membership = list[int](range(entity_graph.vcount()))
         else:
             try:
                 partition = entity_graph.community_leiden(
@@ -343,11 +345,11 @@ class TeleportationHybridIndex:
 
         if not scores:
             if self.num_communities <= 0:
-                return set()
-            return set(range(min(self.num_communities, top_k)))
+                return set[int]()
+            return set[int](range(min(self.num_communities, top_k)))
 
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return set([community_id for community_id, _ in ranked[:top_k]])
+        return set[int]([community_id for community_id, _ in ranked[:top_k]])
 
     def _build_active_node_mask(
         self,
@@ -355,7 +357,7 @@ class TeleportationHybridIndex:
         seed_node_idxs: np.ndarray,
     ) -> np.ndarray:
         active = np.zeros(self.num_nodes, dtype=bool)
-        for node_idx, node_comm in enumerate(self.node_communities):
+        for node_idx, node_comm in enumerate[frozenset[int]](self.node_communities):
             if node_comm and not node_comm.isdisjoint(active_communities):
                 active[node_idx] = True
 
@@ -479,7 +481,9 @@ class TeleportationHybridIndex:
         if not active_communities and self.num_communities > 0:
             active_communities = set(range(self.num_communities))
 
-        active_node_mask = self._build_active_node_mask(active_communities, seed_node_idxs)
+        active_node_mask = self._build_active_node_mask(
+            active_communities, seed_node_idxs
+        )
         local_t, bridge_t, row_has_local, row_has_bridge = (
             self._build_local_bridge_transitions(active_node_mask)
         )
@@ -554,7 +558,9 @@ class TeleportationHybridIndex:
             "iterations": int(iterations),
             "teleports": int(teleport_count),
             "active_communities": int(len(active_communities)),
-            "home_communities": int(min(home_communities_top_k, len(active_communities))),
+            "home_communities": int(
+                min(home_communities_top_k, len(active_communities))
+            ),
             "leakage_gamma": float(gamma),
             "teleport_threshold": float(teleport_threshold),
         }
