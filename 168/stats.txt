@@ -1,0 +1,39 @@
+============================================================
+CHUNKING SUMMARY
+============================================================
+Total chunks     : 767
+
+Length stats (chars):
+  min    = 65
+  P25    = 508
+  median = 620
+  mean   = 687.8
+  P75    = 836
+  P95    = 1185
+  P99    = 1436
+  max    = 1497
+
+Method breakdown:
+  by_diem                     429  ( 55.9%)
+  by_khoan                    277  ( 36.1%)
+  by_khoan_intro               55  (  7.2%)
+  by_diem_split                 4  (  0.5%)
+  dieu_only                     2  (  0.3%)
+
+Chunks per Chương:
+  Chương I: 43
+  Chương II: 560
+  Chương III: 127
+  Chương IV: 37
+
+Top 10 Điều nhiều chunk nhất (hub candidates):
+  Điều 32: 95 chunks
+  Điều 6: 68 chunks
+  Điều 7: 54 chunks
+  Điều 47: 52 chunks
+  Điều 39: 40 chunks
+  Điều 8: 33 chunks
+  Điều 20: 32 chunks
+  Điều 52: 32 chunks
+  Điều 26: 30 chunks
+  Điều 21: 27 chunks
