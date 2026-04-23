@@ -8,7 +8,21 @@
 #   Set FPT_API_KEY via your shell or a .env file loaded by start_gateway.sh
 
 model_list:
-  # Chat / LLM
+  # LLM gemini-3.1-flash-lite-preview
+  - model_name: gemini-3.1-flash-lite-preview
+    litellm_params:
+      model: openai/gemini-3.1-flash-lite-preview
+      api_base: https://llm.wokushop.com/v1
+      api_key: os.environ/WOKU_API_KEY
+
+  # LLM gemini-2.5-flash-lite
+  - model_name: gemini-2.5-flash-lite
+    litellm_params:
+      model: openai/gemini-2.5-flash-lite
+      api_base: https://llm.wokushop.com/v1
+      api_key: os.environ/WOKU_API_KEY
+
+  # LLM gpt-4o-mini
   - model_name: gpt-4o-mini
     litellm_params:
       model: openai/gpt-oss-20b
