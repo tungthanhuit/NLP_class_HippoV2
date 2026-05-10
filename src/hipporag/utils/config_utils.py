@@ -17,13 +17,13 @@ class BaseConfig:
         metadata={"help": "Class name indicating which LLM model to use."},
     )
     llm_base_url: str = field(
-        default=None,
+        default="http://localhost:4000/v1",
         metadata={
             "help": "Base URL for the LLM model, if none, means using OPENAI service."
         },
     )
     embedding_base_url: str = field(
-        default=None,
+        default="http://localhost:4000/v1",
         metadata={
             "help": "Base URL for an OpenAI compatible embedding model, if none, means using OPENAI service."
         },
@@ -51,6 +51,38 @@ class BaseConfig:
         default=5,
         metadata={
             "help": "Max number of retry attempts for an asynchronous API calling."
+        },
+    )
+    async_max_retry_attempts: int = field(
+        default=5,
+        metadata={
+            "help": "Max number of retry attempts for retrying OpenAI-compatible API calls."
+        },
+    )
+    async_retry_wait_exp_multiplier: float = field(
+        default=1.0,
+        metadata={
+            "help": "Multiplier used for exponential backoff between retry attempts."
+        },
+    )
+    async_retry_min_wait_exp_time: float = field(
+        default=1.0,
+        metadata={"help": "Minimum wait time, in seconds, for retry backoff."},
+    )
+    async_retry_max_wait_exp_time: float = field(
+        default=60.0,
+        metadata={"help": "Maximum wait time, in seconds, for retry backoff."},
+    )
+    llm_request_delay_seconds: float = field(
+        default=1.0,
+        metadata={
+            "help": "Optional fixed delay, in seconds, before each OpenAI-compatible request."
+        },
+    )
+    openie_max_workers: int = field(
+        default=4,
+        metadata={
+            "help": "Maximum number of concurrent OpenIE chat requests during batch extraction."
         },
     )
     # Storage specific attributes
@@ -173,6 +205,15 @@ class BaseConfig:
     )
     is_directed_graph: bool = field(
         default=False, metadata={"help": "Whether the graph is directed or not."}
+    )
+
+    # Enhancement flags
+    use_enhancements: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable Enhancement 1 (query decomposition + RRF) and Enhancement 2 (coverage audit). "
+                    "Disabled by default to preserve the standard pipeline for comparison."
+        },
     )
 
     # Retrieval specific attributes

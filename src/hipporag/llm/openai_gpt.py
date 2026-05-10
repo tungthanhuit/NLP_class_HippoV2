@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 from copy import deepcopy
 from typing import List, Tuple
 
@@ -11,7 +12,7 @@ import openai
 from filelock import FileLock
 from openai import OpenAI
 from packaging import version
-from tenacity import retry, stop_after_attempt, wait_fixed
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..utils.config_utils import BaseConfig
 from ..utils.llm_utils import TextChatMessage
@@ -113,8 +114,16 @@ def cache_response(func):
 def dynamic_retry_decorator(func):
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        max_retries = getattr(self, "max_retries", 5)
-        dynamic_retry = retry(stop=stop_after_attempt(max_retries), wait=wait_fixed(1))
+        config = getattr(self, "global_config", None)
+        max_retries = getattr(
+            config, "async_max_retry_attempts", getattr(self, "max_retries", 5)
+        )
+        wait = wait_exponential(
+            multiplier=getattr(config, "async_retry_wait_exp_multiplier", 1.0),
+            min=getattr(config, "async_retry_min_wait_exp_time", 1.0),
+            max=getattr(config, "async_retry_max_wait_exp_time", 60.0),
+        )
+        dynamic_retry = retry(stop=stop_after_attempt(max_retries), wait=wait)
         decorated_func = dynamic_retry(func)
         return decorated_func(self, *args, **kwargs)
 
@@ -188,6 +197,10 @@ class CacheOpenAI(BaseLLM):
     def infer(
         self, messages: List[TextChatMessage], **kwargs
     ) -> Tuple[List[TextChatMessage], dict]:
+        request_delay = getattr(self.global_config, "llm_request_delay_seconds", 0.0)
+        if request_delay > 0:
+            time.sleep(request_delay)
+
         params = deepcopy(self.llm_config.generate_params)
         if kwargs:
             params.update(kwargs)

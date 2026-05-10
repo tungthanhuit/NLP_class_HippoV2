@@ -160,12 +160,17 @@ class OpenIE:
             chunk_key: chunk["content"] for chunk_key, chunk in chunks.items()
         }
 
+        max_workers = getattr(
+            self.llm_model.global_config, "openie_max_workers", 4
+        )
+        max_workers = max(1, min(max_workers, len(chunk_passages) or 1))
+
         ner_results_list = []
         total_prompt_tokens = 0
         total_completion_tokens = 0
         num_cache_hit = 0
 
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Create NER futures for each chunk
             ner_futures = {
                 executor.submit(self.ner, chunk_key, passage): chunk_key
@@ -193,7 +198,7 @@ class OpenIE:
 
         triple_results_list = []
         total_prompt_tokens, total_completion_tokens, num_cache_hit = 0, 0, 0
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Create triple extraction futures for each chunk
             re_futures = {
                 executor.submit(

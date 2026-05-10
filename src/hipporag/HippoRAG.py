@@ -26,6 +26,37 @@ from .utils.config_utils import BaseConfig
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Query decomposition helpers (Enhancement 1)
+# ---------------------------------------------------------------------------
+
+_MULTI_HOP_SIGNALS: frozenset = frozenset([
+    "born first", "born later", "died first", "lived longer",
+    "which of the two", "who is older", "who is younger",
+    "both", "same country",
+    "father", "mother", "husband", "wife",
+    "father-in-law", "mother-in-law", "paternal", "maternal",
+    "director of film", "performer of song", "composer of film",
+    "who directed", "who wrote", "who composed",
+])
+
+_DECOMPOSE_SYSTEM_MSG = (
+    "You decompose multi-hop questions into atomic sub-queries that target individual entities. "
+    "Respond ONLY with valid JSON — no explanation, no markdown fences."
+)
+
+_DECOMPOSE_USER_TMPL = (
+    "Decompose the following question into named entities and one atomic sub-query per entity.\n"
+    'Return JSON: {{"entities": [...], "bridge_hint": "...", "sub_queries": [...]}}\n\n'
+    "Question: {query}"
+)
+
+
+def needs_decomposition(query: str) -> bool:
+    """Heuristic classifier: returns True for comparative / relational multi-hop queries."""
+    q = query.lower()
+    return any(signal in q for signal in _MULTI_HOP_SIGNALS)
+
 
 class HippoRAG:
 
@@ -211,7 +242,7 @@ class HippoRAG:
                 A list of documents to be indexed.
         """
 
-        logger.info(f"Indexing Documents")
+        logger.info(f"Indexing {len(docs)} documents")
 
         logger.info(f"Performing OpenIE")
 
@@ -253,10 +284,10 @@ class HippoRAG:
         entity_nodes, chunk_triple_entities = extract_entity_nodes(chunk_triples)
         facts = flatten_facts(chunk_triples)
 
-        logger.info(f"Encoding Entities")
+        logger.info(f"Encoding {len(entity_nodes)} entities")
         self.entity_embedding_store.insert_strings(entity_nodes)
 
-        logger.info(f"Encoding Facts")
+        logger.info(f"Encoding {len(facts)} facts")
         self.fact_embedding_store.insert_strings([str(fact) for fact in facts])
 
         logger.info(f"Constructing Graph")
@@ -425,20 +456,65 @@ class HippoRAG:
 
         retrieval_results = []
 
+        logger.info(f"Starting retrieval for {len(queries)} queries")
+
         for q_idx, query in tqdm(
             enumerate(queries), desc="Retrieving", total=len(queries)
         ):
+            query_start = time.time()
+            logger.info(f"[Retrieve {q_idx + 1}/{len(queries)}] Query: {query[:120]!r}")
+
             rerank_start = time.time()
-            query_fact_scores = self.get_fact_scores(query)
+            query_entities: List[str] = []
+
+            if self.global_config.use_enhancements and needs_decomposition(query):
+                # --- Enhancement 1: query decomposition + multi-query fact retrieval ---
+                logger.info(f"  [Enh1] Query flagged for decomposition")
+                decomp = self.decompose_query(query)
+                sub_queries = decomp.get("sub_queries") or [query]
+                query_entities = decomp.get("entities") or []
+                if len(sub_queries) > 1:
+                    query_fact_scores = self.get_multi_query_fact_scores(sub_queries)
+                else:
+                    query_fact_scores = self.get_fact_scores(query)
+                    query_entities = []
+            else:
+                query_fact_scores = self.get_fact_scores(query)
+
+            if len(query_fact_scores) > 0:
+                logger.debug(
+                    f"  Fact scores — n={len(query_fact_scores)}, "
+                    f"min={query_fact_scores.min():.4f}, max={query_fact_scores.max():.4f}, "
+                    f"mean={query_fact_scores.mean():.4f}"
+                )
+
             top_k_fact_indices, top_k_facts, rerank_log = self.rerank_facts(
                 query, query_fact_scores
             )
+
+            if self.global_config.use_enhancements and query_entities and rerank_log.get("facts_before_rerank"):
+                # --- Enhancement 2: coverage audit (post-rerank guard) ---
+                top_k_facts, top_k_fact_indices = self.coverage_audit(
+                    kept_facts=top_k_facts,
+                    kept_indices=top_k_fact_indices,
+                    all_candidates=rerank_log["facts_before_rerank"],
+                    all_candidate_indices=rerank_log["facts_before_rerank_indices"],
+                    query_entities=query_entities,
+                )
+
             rerank_end = time.time()
+
+            logger.info(
+                f"  Recognition memory: {len(rerank_log['facts_before_rerank'])} → "
+                f"{len(top_k_facts)} facts | {rerank_end - rerank_start:.2f}s"
+            )
+            if top_k_facts:
+                logger.debug(f"  Top fact after rerank: {top_k_facts[0]}")
 
             self.rerank_time += rerank_end - rerank_start
 
             if len(top_k_facts) == 0:
-                logger.info("No facts found after reranking, return DPR results")
+                logger.info("  No facts after rerank — falling back to DPR")
                 sorted_doc_ids, sorted_doc_scores = self.dense_passage_retrieval(query)
             else:
                 sorted_doc_ids, sorted_doc_scores = (
@@ -452,12 +528,23 @@ class HippoRAG:
                     )
                 )
 
+            if gold_docs is not None:
+                self._log_supporting_passage_ranks(q_idx, gold_docs, sorted_doc_ids)
+
             top_k_docs = [
                 self.chunk_embedding_store.get_row(self.passage_node_keys[idx])[
                     "content"
                 ]
                 for idx in sorted_doc_ids[:num_to_retrieve]
             ]
+
+            query_elapsed = time.time() - query_start
+            logger.info(
+                f"  Retrieved {len(top_k_docs)} docs | "
+                f"top score={sorted_doc_scores[0]:.4f} | {query_elapsed:.2f}s"
+            )
+            if top_k_docs:
+                logger.debug(f"  Top doc preview: {top_k_docs[0][:120]!r}")
 
             retrieval_results.append(
                 QuerySolution(
@@ -490,6 +577,22 @@ class HippoRAG:
                     k_list=k_list,
                 )
             )
+            # compute additional requested metrics at K=5 and export for tracking
+            try:
+                retrieval_metrics_k5 = self.compute_retrieval_metrics(
+                    retrieval_results=retrieval_results, gold_docs=gold_docs, k=5
+                )
+                # attach custom metrics into overall result under a clear key
+                overall_retrieval_result["custom_metrics_k5"] = retrieval_metrics_k5
+
+                # write to working dir for external tracking
+                metrics_path = os.path.join(self.working_dir, "retrieval_metrics_k5.json")
+                with open(metrics_path, "w") as mf:
+                    json.dump({"overall": overall_retrieval_result, "examples": example_retrieval_results}, mf, indent=2, default=lambda o: float(o) if isinstance(o, (np.floating, np.integer)) else o)
+                logger.info(f"Wrote retrieval k=5 metrics to {metrics_path}")
+            except Exception as e:
+                logger.warning(f"Failed to compute/export custom retrieval metrics: {e}")
+
             logger.info(f"Evaluation results for retrieval: {overall_retrieval_result}")
 
             return retrieval_results, overall_retrieval_result
@@ -586,6 +689,49 @@ class HippoRAG:
                 q.gold_answers = list(gold_answers[idx])
                 if gold_docs is not None:
                     q.gold_docs = gold_docs[idx]
+            # Compute additional metrics (retrieval-side and QA-step)
+            retrieval_metrics = None
+            qa_step_metrics = None
+
+            try:
+                if gold_docs is not None:
+                    retrieval_metrics = self.compute_retrieval_metrics(
+                        retrieval_results=queries, gold_docs=gold_docs, k=self.global_config.retrieval_top_k
+                    )
+
+                predictions = [qa_result.answer for qa_result in queries_solutions]
+                qa_step_metrics = self.compute_qa_step_metrics(
+                    retrieval_results=queries,
+                    predictions=predictions,
+                    gold_answers=gold_answers,
+                    gold_docs=gold_docs,
+                )
+                # also compute metrics specifically at K=5 for retrieval and export QA metrics
+                try:
+                    retrieval_metrics_k5 = None
+                    if gold_docs is not None:
+                        retrieval_metrics_k5 = self.compute_retrieval_metrics(
+                            retrieval_results=queries, gold_docs=gold_docs, k=5
+                        )
+                        # merge into retrieval_metrics under a clear key
+                        if retrieval_metrics is None:
+                            retrieval_metrics = {}
+                        retrieval_metrics["k5"] = retrieval_metrics_k5
+
+                    # write QA overall and per-example EM/F1 to file
+                    qa_metrics_path = os.path.join(self.working_dir, "qa_metrics.json")
+                    qa_export = {
+                        "overall_qa": overall_qa_results,
+                        "per_example_em": example_qa_em_results,
+                        "per_example_f1": example_qa_f1_results,
+                    }
+                    with open(qa_metrics_path, "w") as qf:
+                        json.dump(qa_export, qf, indent=2, default=lambda o: float(o) if isinstance(o, (np.floating, np.integer)) else o)
+                    logger.info(f"Wrote QA metrics to {qa_metrics_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to compute/export K=5 retrieval or QA metrics: {e}")
+            except Exception as e:
+                logger.warning(f"Error computing supplemental metrics: {e}")
 
             return (
                 queries_solutions,
@@ -593,6 +739,8 @@ class HippoRAG:
                 all_metadata,
                 overall_retrieval_result,
                 overall_qa_results,
+                retrieval_metrics,
+                qa_step_metrics,
             )
         else:
             return queries_solutions, all_response_message, all_metadata
@@ -644,11 +792,18 @@ class HippoRAG:
 
         retrieval_results = []
 
+        logger.info(f"Starting DPR retrieval for {len(queries)} queries")
+
         for q_idx, query in tqdm(
             enumerate(queries), desc="Retrieving", total=len(queries)
         ):
-            logger.info("No facts found after reranking, return DPR results")
+            query_start = time.time()
+            logger.info(f"[DPR {q_idx + 1}/{len(queries)}] Query: {query[:120]!r}")
+
             sorted_doc_ids, sorted_doc_scores = self.dense_passage_retrieval(query)
+
+            if gold_docs is not None:
+                self._log_supporting_passage_ranks(q_idx, gold_docs, sorted_doc_ids)
 
             top_k_docs = [
                 self.chunk_embedding_store.get_row(self.passage_node_keys[idx])[
@@ -656,6 +811,14 @@ class HippoRAG:
                 ]
                 for idx in sorted_doc_ids[:num_to_retrieve]
             ]
+
+            query_elapsed = time.time() - query_start
+            logger.info(
+                f"  Retrieved {len(top_k_docs)} docs | "
+                f"top score={sorted_doc_scores[0]:.4f} | {query_elapsed:.2f}s"
+            )
+            if top_k_docs:
+                logger.debug(f"  Top doc preview: {top_k_docs[0][:120]!r}")
 
             retrieval_results.append(
                 QuerySolution(
@@ -683,6 +846,20 @@ class HippoRAG:
                     k_list=k_list,
                 )
             )
+            # compute additional requested metrics at K=5 and export for tracking
+            try:
+                retrieval_metrics_k5 = self.compute_retrieval_metrics(
+                    retrieval_results=retrieval_results, gold_docs=gold_docs, k=5
+                )
+                overall_retrieval_result["custom_metrics_k5"] = retrieval_metrics_k5
+
+                metrics_path = os.path.join(self.working_dir, "retrieval_metrics_k5.json")
+                with open(metrics_path, "w") as mf:
+                    json.dump({"overall": overall_retrieval_result, "examples": example_retrieval_results}, mf, indent=2, default=lambda o: float(o) if isinstance(o, (np.floating, np.integer)) else o)
+                logger.info(f"Wrote retrieval k=5 metrics to {metrics_path}")
+            except Exception as e:
+                logger.warning(f"Failed to compute/export custom retrieval metrics: {e}")
+
             logger.info(f"Evaluation results for retrieval: {overall_retrieval_result}")
 
             return retrieval_results, overall_retrieval_result
@@ -780,12 +957,56 @@ class HippoRAG:
                 if gold_docs is not None:
                     q.gold_docs = gold_docs[idx]
 
+            # Compute additional metrics (retrieval-side and QA-step)
+            retrieval_metrics = None
+            qa_step_metrics = None
+
+            try:
+                if gold_docs is not None:
+                    retrieval_metrics = self.compute_retrieval_metrics(
+                        retrieval_results=queries, gold_docs=gold_docs, k=self.global_config.retrieval_top_k
+                    )
+
+                predictions = [qa_result.answer for qa_result in queries_solutions]
+                qa_step_metrics = self.compute_qa_step_metrics(
+                    retrieval_results=queries,
+                    predictions=predictions,
+                    gold_answers=gold_answers,
+                    gold_docs=gold_docs,
+                )
+                # also compute metrics specifically at K=5 for retrieval and export QA metrics
+                try:
+                    retrieval_metrics_k5 = None
+                    if gold_docs is not None:
+                        retrieval_metrics_k5 = self.compute_retrieval_metrics(
+                            retrieval_results=queries, gold_docs=gold_docs, k=5
+                        )
+                        if retrieval_metrics is None:
+                            retrieval_metrics = {}
+                        retrieval_metrics["k5"] = retrieval_metrics_k5
+
+                    qa_metrics_path = os.path.join(self.working_dir, "qa_metrics.json")
+                    qa_export = {
+                        "overall_qa": overall_qa_results,
+                        "per_example_em": example_qa_em_results,
+                        "per_example_f1": example_qa_f1_results,
+                    }
+                    with open(qa_metrics_path, "w") as qf:
+                        json.dump(qa_export, qf, indent=2, default=lambda o: float(o) if isinstance(o, (np.floating, np.integer)) else o)
+                    logger.info(f"Wrote QA metrics to {qa_metrics_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to compute/export K=5 retrieval or QA metrics: {e}")
+            except Exception as e:
+                logger.warning(f"Error computing supplemental metrics: {e}")
+
             return (
                 queries_solutions,
                 all_response_message,
                 all_metadata,
                 overall_retrieval_result,
                 overall_qa_results,
+                retrieval_metrics,
+                qa_step_metrics,
             )
         else:
             return queries_solutions, all_response_message, all_metadata
@@ -810,15 +1031,24 @@ class HippoRAG:
         # Running inference for QA
         all_qa_messages = []
 
+        logger.info(f"Building QA prompts for {len(queries)} queries (top_k={self.global_config.qa_top_k})")
+
         for query_solution in tqdm(queries, desc="Collecting QA prompts"):
 
             # obtain the retrieved docs
             retrieved_passages = query_solution.docs[: self.global_config.qa_top_k]
 
+            logger.debug(
+                f"[QA prompt] Q: {query_solution.question[:100]!r} | "
+                f"passages={len(retrieved_passages)}"
+            )
+
             prompt_user = ""
             for passage in retrieved_passages:
                 prompt_user += f"Wikipedia Title: {passage}\n\n"
             prompt_user += "Question: " + query_solution.question + "\nThought: "
+
+            logger.debug(f"  Prompt length: {len(prompt_user)} chars (~{len(prompt_user.split())} words)")
 
             if self.prompt_template_manager.is_template_name_valid(
                 name=f"rag_qa_{self.global_config.dataset}"
@@ -837,6 +1067,7 @@ class HippoRAG:
                 )
             )
 
+        logger.info(f"Running LLM inference for {len(all_qa_messages)} QA prompts")
         all_qa_results = [
             self.llm_model.infer(qa_messages)
             for qa_messages in tqdm(all_qa_messages, desc="QA Reading")
@@ -853,6 +1084,10 @@ class HippoRAG:
             enumerate(queries), desc="Extraction Answers from LLM Response"
         ):
             response_content = all_response_message[query_solution_idx]
+            logger.debug(
+                f"[QA {query_solution_idx + 1}/{len(queries)}] "
+                f"Response length: {len(response_content)} chars"
+            )
             try:
                 pred_ans = response_content.split("Answer:")[1].strip()
             except Exception as e:
@@ -861,6 +1096,10 @@ class HippoRAG:
                 )
                 pred_ans = response_content
 
+            logger.info(
+                f"[QA {query_solution_idx + 1}/{len(queries)}] "
+                f"Q: {query_solution.question[:80]!r} → Answer: {pred_ans[:80]!r}"
+            )
             query_solution.answer = pred_ans
             queries_solutions.append(query_solution)
 
@@ -1345,6 +1584,359 @@ class HippoRAG:
 
         return graph_info
 
+    # --- Evaluation / Metric helpers ---
+    def _approx_token_count(self, text: str) -> int:
+        """
+        Approximate token count for given text using a simple heuristic.
+
+        This multiplies whitespace-separated word count by 1.33 to approximate
+        subword tokenization. It's intentionally lightweight to avoid adding a
+        hard dependency (e.g., tiktoken). Results are suitable for relative
+        comparisons and large-scale monitoring.
+        """
+        if text is None:
+            return 0
+        words = len(text.split())
+        return int(words * 1.33)
+
+    def compute_retrieval_metrics(
+        self, retrieval_results: List["QuerySolution"], gold_docs: List[List[str]], k: int = 5
+    ) -> Dict:
+        """
+        Compute retrieval-centered metrics described in the spec.
+
+        Returns a dict with:
+        - ground_truth_counts: list of counts of gold passages per query
+        - R_at_k: Evidence Recall @K (percent queries with at least one gold passage in top-K)
+        - AR_at_k: All-Recall @K (percent queries where all gold passages appear in top-K)
+        - LastHop_at_k: Last-Hop @K (percent queries where final gold passage appears in top-K)
+        - K: provided k
+        """
+        assert len(retrieval_results) == len(gold_docs), "retrieval_results and gold_docs must align"
+
+        total = len(gold_docs)
+        ground_truth_counts = [len(g) for g in gold_docs]
+
+        r_at_k_count = 0
+        ar_at_k_count = 0
+        lasthop_at_k_count = 0
+        firsthop_at_k_count = 0
+
+        for rr, gold in zip(retrieval_results, gold_docs):
+            retrieved_top_k = set(rr.docs[:k])
+            gold_set = set(gold)
+
+            # Evidence Recall (any gold in top-K)
+            if len(retrieved_top_k.intersection(gold_set)) > 0:
+                r_at_k_count += 1
+
+            # All-Recall: all gold passages present in top-K
+            if gold_set.issubset(retrieved_top_k):
+                ar_at_k_count += 1
+
+            # Last-Hop: consider last element of gold list as the last hop
+            if len(gold) > 0 and gold[-1] in retrieved_top_k:
+                lasthop_at_k_count += 1
+            # First-Hop: consider first element of gold list as the first hop
+            if len(gold) > 0 and gold[0] in retrieved_top_k:
+                firsthop_at_k_count += 1
+
+        metrics = {
+            "ground_truth_counts": ground_truth_counts,
+            "K": k,
+            "R@K": round((r_at_k_count / total) * 100.0, 4) if total > 0 else 0.0,
+            "AR@K": round((ar_at_k_count / total) * 100.0, 4) if total > 0 else 0.0,
+            "FirstHop@K": round((firsthop_at_k_count / total) * 100.0, 4) if total > 0 else 0.0,
+            "LastHop@K": round((lasthop_at_k_count / total) * 100.0, 4) if total > 0 else 0.0,
+        }
+
+        return metrics
+
+    def compute_qa_step_metrics(
+        self,
+        retrieval_results: List["QuerySolution"],
+        predictions: List[str],
+        gold_answers: List[List[str]],
+        gold_docs: List[List[str]] | None = None,
+    ) -> Dict:
+        """
+        Compute QA-stage metrics described in the spec.
+
+        Returns a dict containing:
+        - avg_context_tokens: average approximate input tokens supplied to the generator
+        - context_coverage_pct: percent queries where at least one gold answer appears in context
+        - final_accuracy_pct: percent queries where any predicted answer matches any gold answer
+        - reasoning_failure_rate: percent of queries where gold evidence present but prediction incorrect
+        - tokens_per_accuracy_point: total_tokens / (accuracy_pct) — useful to compare model cost-efficiency
+
+        Notes:
+        - "Context" is taken as the concatenation of retrieved passages for a query.
+        - Token counts are approximate via `_approx_token_count`.
+        """
+        assert len(retrieval_results) == len(predictions) == len(gold_answers)
+
+        total_queries = len(gold_answers)
+        total_tokens = 0
+        context_coverage_count = 0
+        correct_count = 0
+        reasoning_failure_count = 0
+
+        for rr, pred, gold_ans_list, gold_doc_list in zip(
+            retrieval_results, predictions, gold_answers, (gold_docs or [None] * total_queries)
+        ):
+            # build context
+            context_text = "\n".join(rr.docs)
+            tokens = self._approx_token_count(context_text)
+            total_tokens += tokens
+
+            # context coverage: check if any gold answer string appears in the context
+            # fallback: if gold_doc_list provided, treat presence of any gold doc as coverage
+            has_gold_in_context = False
+            if gold_doc_list:
+                retrieved_set = set(rr.docs)
+                if any(gd in retrieved_set for gd in gold_doc_list):
+                    has_gold_in_context = True
+            else:
+                for g_ans in gold_ans_list:
+                    if g_ans and g_ans in context_text:
+                        has_gold_in_context = True
+                        break
+
+            if has_gold_in_context:
+                context_coverage_count += 1
+
+            # final accuracy: exact-match against any gold answer (simple heuristic)
+            is_correct = any(pred.strip() == g.strip() for g in gold_ans_list)
+            if is_correct:
+                correct_count += 1
+
+            # reasoning failure: gold evidence present but prediction incorrect
+            if has_gold_in_context and not is_correct:
+                reasoning_failure_count += 1
+
+        avg_context_tokens = total_tokens / total_queries if total_queries > 0 else 0
+        final_accuracy_pct = (correct_count / total_queries) * 100.0 if total_queries > 0 else 0.0
+        context_coverage_pct = (context_coverage_count / total_queries) * 100.0 if total_queries > 0 else 0.0
+        reasoning_failure_rate = (reasoning_failure_count / total_queries) * 100.0 if total_queries > 0 else 0.0
+
+        tokens_per_accuracy_point = (
+            (total_tokens / final_accuracy_pct) if final_accuracy_pct > 0 else None
+        )
+
+        metrics = {
+            "avg_context_tokens": int(avg_context_tokens),
+            "total_tokens": int(total_tokens),
+            "context_coverage_pct": round(context_coverage_pct, 4),
+            "final_accuracy_pct": round(final_accuracy_pct, 4),
+            "reasoning_failure_rate_pct": round(reasoning_failure_rate, 4),
+            "tokens_per_accuracy_point": tokens_per_accuracy_point,
+        }
+
+        return metrics
+
+    def _log_supporting_passage_ranks(
+        self,
+        q_idx: int,
+        gold_docs: List[List[str]],
+        sorted_doc_ids: np.ndarray,
+    ) -> None:
+        """
+        For a single query, logs the 1-indexed rank of every gold/supporting passage
+        in the full sorted retrieval list.  'NOT_INDEXED' means the passage was never
+        inserted into the corpus; 'NOT_FOUND' means it was indexed but scored outside
+        the returned sorted list (should not happen with a complete ranking).
+        """
+        text_to_hash = getattr(self.chunk_embedding_store, "text_to_hash_id", {})
+        current_gold = gold_docs[q_idx]
+        ranks = []
+        for gold_doc in current_gold:
+            h = text_to_hash.get(gold_doc)
+            if h is None:
+                ranks.append("NOT_INDEXED")
+                continue
+            local_idx = self.passage_key_to_local_idx.get(h)
+            if local_idx is None:
+                ranks.append("NOT_INDEXED")
+                continue
+            pos = np.nonzero(sorted_doc_ids == local_idx)[0]
+            ranks.append(int(pos[0]) + 1 if len(pos) > 0 else "NOT_FOUND")
+        logger.info(f"  Supporting passage ranks (1-indexed, {len(current_gold)} gold): {ranks}")
+
+    # ------------------------------------------------------------------
+    # Enhancement 1 — Query decomposition + multi-query fact retrieval
+    # ------------------------------------------------------------------
+
+    def decompose_query(self, query: str) -> Dict:
+        """
+        LLM call that breaks a multi-hop query into named entities and one
+        atomic sub-query per entity.  Returns a dict with keys:
+            entities   : list[str]
+            bridge_hint: str
+            sub_queries: list[str]
+        Falls back to {"entities": [], "sub_queries": [query]} on any error.
+        """
+        messages = [
+            {"role": "system", "content": _DECOMPOSE_SYSTEM_MSG},
+            {"role": "user", "content": _DECOMPOSE_USER_TMPL.format(query=query)},
+        ]
+        try:
+            response, _meta, _cache = self.llm_model.infer(messages)
+            text = response.strip()
+            # strip optional markdown code fences
+            text = re.sub(r"^```[a-z]*\n?", "", text)
+            text = re.sub(r"\n?```$", "", text.strip())
+            result = json.loads(text)
+            sub_qs = result.get("sub_queries") or []
+            entities = result.get("entities") or []
+            logger.info(
+                f"  Decomposed → {len(sub_qs)} sub-queries, "
+                f"{len(entities)} entities: {sub_qs}"
+            )
+            logger.debug(f"  Entities: {entities} | Bridge: {result.get('bridge_hint')}")
+            return result
+        except Exception as e:
+            logger.warning(f"  decompose_query failed ({e}) — using original query")
+            return {"entities": [], "bridge_hint": "", "sub_queries": [query]}
+
+    def get_multi_query_fact_scores(
+        self, sub_queries: List[str], rrf_k: int = 60
+    ) -> np.ndarray:
+        """
+        Run one fact-embedding lookup per sub-query, then merge with
+        Reciprocal Rank Fusion (RRF).  Returns a normalised score array
+        of shape (num_facts,) — same shape as get_fact_scores(), so the
+        rest of the pipeline is unchanged.
+        """
+        rrf_scores = np.zeros(len(self.fact_node_keys))
+
+        for sq in sub_queries:
+            scores = self.get_fact_scores(sq)
+            if len(scores) == 0:
+                continue
+            ranks = np.argsort(scores)[::-1]  # descending; rank 0 = best
+            for rank_pos, fact_idx in enumerate(ranks):
+                rrf_scores[fact_idx] += 1.0 / (rank_pos + 1 + rrf_k)
+
+        max_score = rrf_scores.max()
+        if max_score > 0:
+            rrf_scores /= max_score
+
+        logger.info(
+            f"  RRF ({len(sub_queries)} sub-queries): "
+            f"nonzero={np.count_nonzero(rrf_scores)}, "
+            f"max={rrf_scores.max():.4f}, mean={rrf_scores[rrf_scores > 0].mean():.4f}"
+        )
+        return rrf_scores
+
+    # ------------------------------------------------------------------
+    # Enhancement 2 — Coverage-constrained reranking
+    # ------------------------------------------------------------------
+
+    def coverage_audit(
+        self,
+        kept_facts: List[Tuple],
+        kept_indices: List[int],
+        all_candidates: List[Tuple],
+        all_candidate_indices: List[int],
+        query_entities: List[str],
+    ) -> Tuple[List[Tuple], List[int]]:
+        """
+        Post-rerank guard (Enhancement 2 Step 2a).
+
+        For every query entity not represented in kept_facts, inject the
+        highest-scoring (first in all_candidates) fact that mentions it,
+        regardless of the reranker's decision.
+        """
+        def _entity_in_fact(entity: str, fact: Tuple) -> bool:
+            el = entity.lower()
+            return any(el in str(part).lower() for part in fact)
+
+        # Build coverage set from already-kept facts
+        covered_tokens: Set[str] = set()
+        for fact in kept_facts:
+            for part in fact:
+                covered_tokens.add(str(part).lower())
+
+        result_facts = list(kept_facts)
+        result_indices = list(kept_indices)
+        kept_idx_set = set(kept_indices)
+        injected: List[Tuple[str, Tuple]] = []
+
+        for entity in query_entities:
+            entity_lower = entity.lower()
+            if any(entity_lower in tok for tok in covered_tokens):
+                continue  # already covered
+
+            for cand_fact, cand_idx in zip(all_candidates, all_candidate_indices):
+                if cand_idx in kept_idx_set:
+                    continue
+                if _entity_in_fact(entity, cand_fact):
+                    result_facts.append(cand_fact)
+                    result_indices.append(cand_idx)
+                    kept_idx_set.add(cand_idx)
+                    injected.append((entity, cand_fact))
+                    for part in cand_fact:
+                        covered_tokens.add(str(part).lower())
+                    break
+
+        if injected:
+            for entity, fact in injected:
+                logger.info(f"  Coverage audit ✚ injected for '{entity}': {fact}")
+        else:
+            logger.debug("  Coverage audit: all entities already covered")
+
+        return result_facts, result_indices
+
+    def entity_partitioned_selection(
+        self,
+        candidates: List[Tuple],
+        candidate_indices: List[int],
+        query_entities: List[str],
+        quota_per_entity: int = 1,
+        max_total: int = 5,
+    ) -> Tuple[List[Tuple], List[int]]:
+        """
+        Enhancement 2 Step 2c — hard quota guarantee.
+
+        Partitions the candidate pool by entity and ensures at least
+        quota_per_entity facts per entity appear in the final selection,
+        up to max_total facts total.  Can be used instead of coverage_audit
+        for a zero-LLM-cost constraint.
+        """
+        entity_buckets: Dict[str, List[Tuple[Tuple, int]]] = {e: [] for e in query_entities}
+        overflow: List[Tuple[Tuple, int]] = []
+
+        for fact, idx in zip(candidates, candidate_indices):
+            assigned = False
+            for entity in query_entities:
+                if entity.lower() in str(fact).lower():
+                    entity_buckets[entity].append((fact, idx))
+                    assigned = True
+                    break
+            if not assigned:
+                overflow.append((fact, idx))
+
+        selected_facts, selected_indices = [], []
+        for entity, bucket in entity_buckets.items():
+            for fact, idx in bucket[:quota_per_entity]:
+                selected_facts.append(fact)
+                selected_indices.append(idx)
+            logger.debug(
+                f"  entity_partitioned_selection: entity='{entity}' "
+                f"bucket={len(bucket)}, kept={min(len(bucket), quota_per_entity)}"
+            )
+
+        remaining = max_total - len(selected_facts)
+        for fact, idx in overflow[:max(remaining, 0)]:
+            selected_facts.append(fact)
+            selected_indices.append(idx)
+
+        logger.info(
+            f"  entity_partitioned_selection: {len(candidates)} → {len(selected_facts)} "
+            f"(quota={quota_per_entity}/entity, max={max_total})"
+        )
+        return selected_facts[:max_total], selected_indices[:max_total]
+
     def prepare_retrieval_objects(self):
         """
         Prepares various in-memory objects and attributes necessary for fast retrieval processes, such as embedding data and graph relationships, ensuring consistency
@@ -1363,6 +1955,11 @@ class HippoRAG:
             self.chunk_embedding_store.get_all_ids()
         )  # a list of passage node keys
         self.fact_node_keys: List = list(self.fact_embedding_store.get_all_ids())
+
+        # reverse map: passage hash_id → position in passage_node_keys (used for gold-doc rank lookup)
+        self.passage_key_to_local_idx: Dict[str, int] = {
+            key: idx for idx, key in enumerate(self.passage_node_keys)
+        }
 
         # Check if the graph has the expected number of nodes
         expected_node_count = len(self.entity_node_keys) + len(self.passage_node_keys)
@@ -1580,6 +2177,11 @@ class HippoRAG:
                 else query_fact_scores
             )
             query_fact_scores = min_max_normalize(query_fact_scores)
+            logger.debug(
+                f"get_fact_scores: n={len(query_fact_scores)}, "
+                f"min={query_fact_scores.min():.4f}, max={query_fact_scores.max():.4f}, "
+                f"mean={query_fact_scores.mean():.4f}"
+            )
             return query_fact_scores
         except Exception as e:
             logger.error(f"Error computing fact scores: {str(e)}")
@@ -1794,6 +2396,12 @@ class HippoRAG:
             sum(node_weights) > 0
         ), f"No phrases found in the graph for the given facts: {top_k_facts}"
 
+        nonzero_phrases = int(np.count_nonzero(phrase_weights))
+        logger.debug(
+            f"graph_search: {nonzero_phrases} nonzero phrase nodes, "
+            f"{len(linking_score_map)} entries in linking_score_map"
+        )
+
         # Running PPR algorithm based on the passage and phrase weights previously assigned
         ppr_start = time.time()
         ppr_sorted_doc_ids, ppr_sorted_doc_scores = self.run_ppr(
@@ -1802,6 +2410,7 @@ class HippoRAG:
         ppr_end = time.time()
 
         self.ppr_time += ppr_end - ppr_start
+        logger.debug(f"  PPR done in {ppr_end - ppr_start:.2f}s | top doc score={ppr_sorted_doc_scores[0]:.4f}")
 
         assert len(ppr_sorted_doc_ids) == len(
             self.passage_node_idxs
@@ -1836,13 +2445,17 @@ class HippoRAG:
         try:
             # Get the top k facts by score
             if len(query_fact_scores) <= link_top_k:
-                # If we have fewer facts than requested, use all of them
                 candidate_fact_indices = np.argsort(query_fact_scores)[::-1].tolist()
             else:
-                # Otherwise get the top k
                 candidate_fact_indices = np.argsort(query_fact_scores)[-link_top_k:][
                     ::-1
                 ].tolist()
+
+            candidate_scores = [float(query_fact_scores[i]) for i in candidate_fact_indices]
+            logger.info(
+                f"  rerank_facts: selected {len(candidate_fact_indices)} candidates "
+                f"(scores {candidate_scores[0]:.4f} … {candidate_scores[-1]:.4f})"
+            )
 
             # Get the actual fact IDs
             real_candidate_fact_ids = [
@@ -1853,6 +2466,10 @@ class HippoRAG:
                 eval(fact_row_dict[id]["content"]) for id in real_candidate_fact_ids
             ]
 
+            logger.debug("  Candidate facts (score → triple):")
+            for score, fact in zip(candidate_scores, candidate_facts):
+                logger.debug(f"    {score:.4f}  {fact}")
+
             # Rerank the facts
             top_k_fact_indices, top_k_facts, reranker_dict = self.rerank_filter(
                 query,
@@ -1861,15 +2478,24 @@ class HippoRAG:
                 len_after_rerank=link_top_k,
             )
 
+            logger.info(
+                f"  rerank_facts: {len(candidate_facts)} → {len(top_k_facts)} facts kept"
+            )
+            if top_k_facts:
+                logger.debug("  Facts after rerank:")
+                for fact in top_k_facts:
+                    logger.debug(f"    {fact}")
+
             rerank_log = {
                 "facts_before_rerank": candidate_facts,
+                "facts_before_rerank_indices": candidate_fact_indices,
                 "facts_after_rerank": top_k_facts,
             }
 
             return top_k_fact_indices, top_k_facts, rerank_log
 
         except Exception as e:
-            logger.error(f"Error in rerank_facts: {str(e)}")
+            logger.error(f"Error in rerank_facts: {str(e)}", exc_info=True)
             return (
                 [],
                 [],

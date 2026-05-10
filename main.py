@@ -1,6 +1,7 @@
 import os
 from typing import List
 import json
+from datetime import datetime
 
 from src.hipporag.HippoRAG import HippoRAG
 from src.hipporag.utils.misc_utils import string_to_bool
@@ -97,7 +98,7 @@ def main():
     parser.add_argument(
         "--llm_base_url",
         type=str,
-        default="https://api.openai.com/v1",
+        default="http://localhost:4000/v1",
         help="LLM base URL",
     )
     parser.add_argument("--llm_name", type=str, default="gpt-4o-mini", help="LLM name")
@@ -128,6 +129,38 @@ def main():
     parser.add_argument(
         "--save_dir", type=str, default="outputs", help="Save directory"
     )
+    parser.add_argument(
+        "--mode",
+        choices=["all", "index", "qa"],
+        default="all",
+        help="Run mode: 'index' to build index only, 'qa' to run QA pipeline only, 'all' to do both",
+    )
+    parser.add_argument(
+        "--query_file",
+        type=str,
+        default=None,
+        help="Path to a custom query JSON file (same format as dataset). Defaults to reproduce/dataset/{dataset}.json",
+    )
+    parser.add_argument(
+        "--sample_idx",
+        type=int,
+        default=None,
+        help="Run only this single sample index from the query file",
+    )
+    parser.add_argument(
+        "--log_level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity level (default: INFO)",
+    )
+    parser.add_argument(
+        "--use_enhancements",
+        action="store_true",
+        default=False,
+        help="Enable Enhancement 1 (query decomposition + RRF) and Enhancement 2 (coverage audit). "
+             "Omit to run the standard pipeline for comparison.",
+    )
     args = parser.parse_args()
 
     dataset_name = args.dataset
@@ -149,7 +182,12 @@ def main():
     force_openie_from_scratch = string_to_bool(args.force_openie_from_scratch)
 
     # Prepare datasets and evaluation
-    samples = json.load(open(f"reproduce/dataset/{dataset_name}.json", "r"))
+    query_file = args.query_file or f"reproduce/dataset/{dataset_name}.json"
+    samples = json.load(open(query_file, "r"))
+
+    if args.sample_idx is not None:
+        samples = [samples[args.sample_idx]]
+
     all_queries = [s["question"] for s in samples]
 
     gold_answers = get_gold_answers(samples)
@@ -179,16 +217,51 @@ def main():
         max_new_tokens=None,
         corpus_len=len(corpus),
         openie_mode=args.openie_mode,
+        use_enhancements=args.use_enhancements,
     )
 
-    logging.basicConfig(level=logging.INFO)
+    log_fmt = "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
+    log_datefmt = "%Y-%m-%d %H:%M:%S"
+    formatter = logging.Formatter(log_fmt, datefmt=log_datefmt)
+
+    os.makedirs(save_dir, exist_ok=True)
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = os.path.join(save_dir, f"run_{run_ts}.log")
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    log_level = getattr(logging, args.log_level.upper())
+
+    # Root logger at WARNING so network/file helpers (httpx, openai, urllib3,
+    # httpcore, requests, asyncio, parso, dspy) stay silent by default.
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(stream_handler)
+
+    # Apply the user-chosen level only to project loggers.
+    for name in ("src.hipporag", "__main__"):
+        logging.getLogger(name).setLevel(log_level)
+
+    # Silence specific noisy third-party loggers regardless of log_level.
+    for noisy in ("httpx", "httpcore", "openai", "anthropic",
+                  "urllib3", "requests", "asyncio", "dspy",
+                  "parso", "filelock", "sentence_transformers"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    logging.getLogger("__main__").info(f"Logging to {log_path}")
 
     hipporag = HippoRAG(global_config=config)
 
-    hipporag.index(docs)
+    if args.mode in ("all", "index"):
+        hipporag.index(docs)
 
-    # Retrieval and QA
-    hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers)
+    if args.mode in ("all", "qa"):
+        hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers)
 
 
 if __name__ == "__main__":

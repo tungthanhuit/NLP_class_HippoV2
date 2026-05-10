@@ -235,30 +235,74 @@ class BaseEmbeddingModel:
 
 
 class EmbeddingCache:
-    """A multiprocessing-safe global cache for storing embeddings."""
+    """Thread-safe embedding cache with lazy shared-state initialization.
 
-    _manager = multiprocessing.Manager()
-    _cache = _manager.dict()  # Shared dictionary for multiprocessing
-    _lock = threading.Lock()  # Thread-safe lock for concurrent access
+    On macOS and other spawn-based environments, creating a multiprocessing.Manager()
+    during module import can crash before the main module finishes bootstrapping.
+    We therefore initialize the shared cache lazily and fall back to a local
+    in-process cache when the shared manager is not safe to create.
+    """
+
+    _init_lock = threading.Lock()
+    _lock = threading.Lock()
+    _manager = None
+    _shared_cache = None
+    _local_cache = {}
+    _shared_cache_failed = False
+
+    @classmethod
+    def _should_use_shared_cache(cls) -> bool:
+        return (
+            multiprocessing.current_process().name == "MainProcess"
+            and threading.current_thread() is threading.main_thread()
+        )
+
+    @classmethod
+    def _get_cache_backend(cls):
+        if cls._shared_cache is not None:
+            return cls._shared_cache
+
+        if cls._shared_cache_failed or not cls._should_use_shared_cache():
+            return cls._local_cache
+
+        with cls._init_lock:
+            if cls._shared_cache is not None:
+                return cls._shared_cache
+            if cls._shared_cache_failed or not cls._should_use_shared_cache():
+                return cls._local_cache
+
+            try:
+                cls._manager = multiprocessing.Manager()
+                cls._shared_cache = cls._manager.dict()
+                return cls._shared_cache
+            except (EOFError, OSError, RuntimeError) as exc:
+                cls._shared_cache_failed = True
+                logger.debug(
+                    "Falling back to local embedding cache because shared manager initialization failed: %s",
+                    exc,
+                )
+                return cls._local_cache
 
     @classmethod
     def get(cls, content):
         """Retrieve the embedding if cached."""
-        return cls._cache.get(content)
+        with cls._lock:
+            return cls._get_cache_backend().get(content)
 
     @classmethod
     def set(cls, content, embedding):
         """Store an embedding in the cache."""
         with cls._lock:  # Ensures thread safety
-            cls._cache[content] = embedding
+            cls._get_cache_backend()[content] = embedding
 
     @classmethod
     def contains(cls, content):
         """Check if the embedding exists in cache."""
-        return content in cls._cache
+        with cls._lock:
+            return content in cls._get_cache_backend()
 
     @classmethod
     def clear(cls):
         """Clear the entire cache."""
         with cls._lock:
-            cls._cache.clear()
+            cls._get_cache_backend().clear()
