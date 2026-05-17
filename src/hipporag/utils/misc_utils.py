@@ -42,6 +42,10 @@ class QuerySolution:
     answer: str = None
     gold_answers: List[str] = None
     gold_docs: Optional[List[str]] = None
+    # Populated by qa_with_ircot: full accumulated context (initial + all hop passages)
+    ircot_context: Optional[List[str]] = None
+    # Number of IRCoT reasoning steps taken for this query (0 = no IRCoT / single-shot)
+    ircot_steps: int = 0
 
     def to_dict(self):
         return {

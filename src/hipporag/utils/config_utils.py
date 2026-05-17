@@ -228,6 +228,11 @@ class BaseConfig:
         default=0.5, metadata={"help": "Damping factor for ppr algorithm."}
     )
 
+    e1_facts_per_sub_query: int = field(
+        default=3,
+        metadata={"help": "E1: top-K facts to collect per sub-query before unioning into the reranker pool."},
+    )
+
     # QA specific attributes
     max_qa_steps: int = field(
         default=1,

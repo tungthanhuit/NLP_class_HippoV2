@@ -97,7 +97,7 @@ def main():
     parser.add_argument(
         "--llm_base_url",
         type=str,
-        default="https://api.openai.com/v1",
+        default="http://localhost:4000/v1",
         help="LLM base URL",
     )
     parser.add_argument("--llm_name", type=str, default="gpt-4o-mini", help="LLM name")
