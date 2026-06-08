@@ -206,21 +206,21 @@ class BaseEmbeddingModel:
 
     def __init__(self, global_config: Optional[BaseConfig] = None) -> None:
         if global_config is None:
-            logger.debug(
-                "global config is not given. Using the default ExperimentConfig instance."
-            )
+            # logger.debug(
+            #     "global config is not given. Using the default ExperimentConfig instance."
+            # )
             self.global_config = BaseConfig()
         else:
             self.global_config = global_config
-        logger.debug(
-            f"Loading {self.__class__.__name__} with global_config: {asdict(self.global_config)}"
-        )
+        # logger.debug(
+        #     f"Loading {self.__class__.__name__} with global_config: {asdict(self.global_config)}"
+        # )
 
         self.embedding_model_name = self.global_config.embedding_model_name
 
-        logger.debug(
-            f"Init {self.__class__.__name__}'s embedding_model_name with: {self.embedding_model_name}"
-        )
+        # logger.debug(
+        #     f"Init {self.__class__.__name__}'s embedding_model_name with: {self.embedding_model_name}"
+        # )
 
     def batch_encode(self, texts: List[str], **kwargs) -> None:
         raise NotImplementedError
@@ -277,10 +277,10 @@ class EmbeddingCache:
                 return cls._shared_cache
             except (EOFError, OSError, RuntimeError) as exc:
                 cls._shared_cache_failed = True
-                logger.debug(
-                    "Falling back to local embedding cache because shared manager initialization failed: %s",
-                    exc,
-                )
+                # logger.debug(
+                #     "Falling back to local embedding cache because shared manager initialization failed: %s",
+                #     exc,
+                # )
                 return cls._local_cache
 
     @classmethod

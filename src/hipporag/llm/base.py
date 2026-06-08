@@ -110,18 +110,18 @@ class BaseLLM(ABC):
 
     def __init__(self, global_config: Optional[BaseConfig] = None) -> None:
         if global_config is None:
-            logger.debug(
-                "global config is not given. Using the default ExperimentConfig instance."
-            )
+            # logger.debug(
+            #     "global config is not given. Using the default ExperimentConfig instance."
+            # )
             self.global_config = BaseConfig()
         else:
             self.global_config = global_config
-        logger.debug(
-            f"Loading {self.__class__.__name__} with global_config: {asdict(self.global_config)}"
-        )
+        # logger.debug(
+        #     f"Loading {self.__class__.__name__} with global_config: {asdict(self.global_config)}"
+        # )
 
         self.llm_name = self.global_config.llm_name
-        logger.debug(f"Init {self.__class__.__name__}'s llm_name with: {self.llm_name}")
+        # logger.debug(f"Init {self.__class__.__name__}'s llm_name with: {self.llm_name}")
 
     @abstractmethod
     def _init_llm_config(self) -> None:
@@ -142,9 +142,9 @@ class BaseLLM(ABC):
         """
 
         self.llm_config.batch_upsert(updates=updates)
-        logger.debug(
-            f"Updated {self.__class__.__name__}'s llm_config with {updates} to eventually obtain llm_config as: {self.llm_config}"
-        )
+        # logger.debug(
+        #     f"Updated {self.__class__.__name__}'s llm_config with {updates} to eventually obtain llm_config as: {self.llm_config}"
+        # )
 
     def ainfer(self, chat: List[TextChatMessage]) -> Tuple[List[TextChatMessage], dict]:
         """

@@ -207,12 +207,11 @@ class BaseConfig:
         default=False, metadata={"help": "Whether the graph is directed or not."}
     )
 
-    # Enhancement flags
+    # Deprecated compatibility flags
     use_enhancements: bool = field(
         default=False,
         metadata={
-            "help": "Enable Enhancement 1 (query decomposition + RRF) and Enhancement 2 (coverage audit). "
-                    "Disabled by default to preserve the standard pipeline for comparison."
+            "help": "Deprecated. Use EnhancedHippoRAG for the enhancement pipeline; HippoRAG remains the standard baseline."
         },
     )
 
@@ -231,6 +230,17 @@ class BaseConfig:
     e1_facts_per_sub_query: int = field(
         default=3,
         metadata={"help": "E1: top-K facts to collect per sub-query before unioning into the reranker pool."},
+    )
+    verbalize_facts: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Ablation flag for fact embedding surface. "
+                "True (default): embed 'subject predicate object.' sentences. "
+                "False: embed raw tuple strings '(subject, predicate, object)' — "
+                "matches the baseline HippoRAG behaviour for comparison."
+            )
+        },
     )
 
     # QA specific attributes

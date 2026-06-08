@@ -65,11 +65,22 @@ class EmbeddingStore:
         }
 
     def insert_strings(self, texts: List[str]):
+        return self.insert_strings_with_embedding_texts(texts, texts)
+
+    def insert_strings_with_embedding_texts(
+        self, texts: List[str], embedding_texts: List[str]
+    ):
+        if len(texts) != len(embedding_texts):
+            raise ValueError(
+                f"texts and embedding_texts must have the same length, got {len(texts)} and {len(embedding_texts)}"
+            )
+
         nodes_dict = {}
 
-        for text in texts:
+        for text, embedding_text in zip(texts, embedding_texts):
             nodes_dict[compute_mdhash_id(text, prefix=self.namespace + "-")] = {
-                "content": text
+                "content": text,
+                "embedding_text": embedding_text,
             }
 
         # Get all hash_ids from the input dictionary.
@@ -81,25 +92,39 @@ class EmbeddingStore:
 
         # Filter out the missing hash_ids.
         missing_ids = [hash_id for hash_id in all_hash_ids if hash_id not in existing]
+        stale_ids = [
+            hash_id
+            for hash_id in all_hash_ids
+            if hash_id in existing
+            and self.hash_id_to_row[hash_id].get(
+                "embedding_text", self.hash_id_to_row[hash_id]["content"]
+            )
+            != nodes_dict[hash_id]["embedding_text"]
+        ]
 
         logger.info(
-            f"Inserting {len(missing_ids)} new records, {len(all_hash_ids) - len(missing_ids)} records already exist."
+            f"Inserting {len(missing_ids)} new records, refreshing {len(stale_ids)} records, "
+            f"{len(all_hash_ids) - len(missing_ids) - len(stale_ids)} records already current."
         )
 
-        if len(missing_ids) == 0:
+        if len(missing_ids) == 0 and len(stale_ids) == 0:
             # Helpful console signal that embeddings are coming from cache.
             print(
                 f"[EmbeddingStore:{self.namespace}] cache hit: {len(all_hash_ids)} records already exist"
             )
 
-        if not missing_ids:
+        ids_to_encode = missing_ids + stale_ids
+
+        if not ids_to_encode:
             return {}  # All records already exist.
 
-        # Prepare the texts to encode from the "content" field.
-        texts_to_encode = [nodes_dict[hash_id]["content"] for hash_id in missing_ids]
+        # Encode from the retrieval surface while preserving the canonical content.
+        texts_to_encode = [
+            nodes_dict[hash_id]["embedding_text"] for hash_id in ids_to_encode
+        ]
 
         print(
-            f"[EmbeddingStore:{self.namespace}] encoding {len(texts_to_encode)} new texts..."
+            f"[EmbeddingStore:{self.namespace}] encoding {len(texts_to_encode)} embedding texts..."
         )
         start_time = time.time()
         missing_embeddings = self.embedding_model.batch_encode(texts_to_encode)
@@ -113,7 +138,12 @@ class EmbeddingStore:
             f"[EmbeddingStore:{self.namespace}] encoded shape={emb_shape} in {elapsed:.2f}s"
         )
 
-        self._upsert(missing_ids, texts_to_encode, missing_embeddings)
+        self._upsert(
+            ids_to_encode,
+            [nodes_dict[hash_id]["content"] for hash_id in ids_to_encode],
+            missing_embeddings,
+            [nodes_dict[hash_id]["embedding_text"] for hash_id in ids_to_encode],
+        )
 
     def _load_data(self):
         if os.path.exists(self.filename):
@@ -123,10 +153,15 @@ class EmbeddingStore:
                 df["content"].values.tolist(),
                 df["embedding"].values.tolist(),
             )
+            self.embedding_texts = (
+                df["embedding_text"].values.tolist()
+                if "embedding_text" in df.columns
+                else self.texts.copy()
+            )
             self.hash_id_to_idx = {h: idx for idx, h in enumerate(self.hash_ids)}
             self.hash_id_to_row = {
-                h: {"hash_id": h, "content": t}
-                for h, t in zip(self.hash_ids, self.texts)
+                h: {"hash_id": h, "content": t, "embedding_text": et}
+                for h, t, et in zip(self.hash_ids, self.texts, self.embedding_texts)
             }
             self.hash_id_to_text = {
                 h: self.texts[idx] for idx, h in enumerate(self.hash_ids)
@@ -134,10 +169,20 @@ class EmbeddingStore:
             self.text_to_hash_id = {
                 self.texts[idx]: h for idx, h in enumerate(self.hash_ids)
             }
-            assert len(self.hash_ids) == len(self.texts) == len(self.embeddings)
+            assert (
+                len(self.hash_ids)
+                == len(self.texts)
+                == len(self.embeddings)
+                == len(self.embedding_texts)
+            )
             logger.info(f"Loaded {len(self.hash_ids)} records from {self.filename}")
         else:
-            self.hash_ids, self.texts, self.embeddings = [], [], []
+            self.hash_ids, self.texts, self.embeddings, self.embedding_texts = (
+                [],
+                [],
+                [],
+                [],
+            )
             self.hash_id_to_idx, self.hash_id_to_row = {}, {}
 
     def _save_data(self):
@@ -145,13 +190,14 @@ class EmbeddingStore:
             {
                 "hash_id": self.hash_ids,
                 "content": self.texts,
+                "embedding_text": self.embedding_texts,
                 "embedding": self.embeddings,
             }
         )
         data_to_save.to_parquet(self.filename, index=False)
         self.hash_id_to_row = {
-            h: {"hash_id": h, "content": t}
-            for h, t, e in zip(self.hash_ids, self.texts, self.embeddings)
+            h: {"hash_id": h, "content": t, "embedding_text": et}
+            for h, t, et in zip(self.hash_ids, self.texts, self.embedding_texts)
         }
         self.hash_id_to_idx = {h: idx for idx, h in enumerate(self.hash_ids)}
         self.hash_id_to_text = {
@@ -162,10 +208,23 @@ class EmbeddingStore:
         }
         logger.info(f"Saved {len(self.hash_ids)} records to {self.filename}")
 
-    def _upsert(self, hash_ids, texts, embeddings):
-        self.embeddings.extend(embeddings)
-        self.hash_ids.extend(hash_ids)
-        self.texts.extend(texts)
+    def _upsert(self, hash_ids, texts, embeddings, embedding_texts=None):
+        if embedding_texts is None:
+            embedding_texts = texts
+
+        for hash_id, text, embedding, embedding_text in zip(
+            hash_ids, texts, embeddings, embedding_texts
+        ):
+            if hash_id in self.hash_id_to_idx:
+                idx = self.hash_id_to_idx[hash_id]
+                self.texts[idx] = text
+                self.embeddings[idx] = embedding
+                self.embedding_texts[idx] = embedding_text
+            else:
+                self.hash_ids.append(hash_id)
+                self.texts.append(text)
+                self.embeddings.append(embedding)
+                self.embedding_texts.append(embedding_text)
 
         logger.info(f"Saving new records.")
         self._save_data()
@@ -182,6 +241,7 @@ class EmbeddingStore:
             self.hash_ids.pop(idx)
             self.texts.pop(idx)
             self.embeddings.pop(idx)
+            self.embedding_texts.pop(idx)
 
         logger.info(f"Saving record after deletion.")
         self._save_data()

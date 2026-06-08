@@ -190,7 +190,7 @@ class CacheOpenAI(BaseLLM):
         }
 
         self.llm_config = LLMConfig.from_dict(config_dict=config_dict)
-        logger.debug(f"Init {self.__class__.__name__}'s llm_config: {self.llm_config}")
+        # logger.debug(f"Init {self.__class__.__name__}'s llm_config: {self.llm_config}")
 
     @cache_response
     @dynamic_retry_decorator
@@ -205,7 +205,7 @@ class CacheOpenAI(BaseLLM):
         if kwargs:
             params.update(kwargs)
         params["messages"] = messages
-        logger.debug(f"Calling OpenAI GPT API with:\n{params}")
+        # logger.debug(f"Calling OpenAI GPT API with:\n{params}")
 
         # Some OpenAI-compatible servers (and older OpenAI SDK versions) do not support `max_completion_tokens`.
         if "gpt" not in params["model"] or version.parse(

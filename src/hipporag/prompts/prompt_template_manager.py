@@ -61,7 +61,7 @@ class PromptTemplateManager:
                 f"Templates directory '{self.templates_dir}' does not exist."
             )
 
-        logger.info(f"Loading templates from directory: {self.templates_dir}")
+        # logger.info(f"Loading templates from directory: {self.templates_dir}")
         for filename in os.listdir(self.templates_dir):
             if filename.endswith(".py") and filename != "__init__.py":
                 script_name = os.path.splitext(filename)[0]
@@ -87,7 +87,7 @@ class PromptTemplateManager:
                         )
 
                     prompt_template = module.prompt_template
-                    logger.debug(f"Loaded template from {module_name}")
+                    # logger.debug(f"Loaded template from {module_name}")
 
                     if isinstance(prompt_template, Template):
                         self.templates[script_name] = prompt_template
@@ -113,9 +113,9 @@ class PromptTemplateManager:
                             f"Invalid prompt_template format in '{module_name}.py'. Must be a Template or List[Dict]."
                         )
 
-                    logger.debug(
-                        f"Successfully loaded template '{script_name}' from '{module_name}.py'."
-                    )
+                    # logger.debug(
+                    #     f"Successfully loaded template '{script_name}' from '{module_name}.py'."
+                    # )
 
                 except Exception as e:
                     logger.error(
@@ -142,9 +142,9 @@ class PromptTemplateManager:
             # Render a single string template
             try:
                 result = template.substitute(**kwargs)
-                logger.debug(
-                    f"Successfully rendered template '{name}' with variables: {kwargs}."
-                )
+                # logger.debug(
+                #     f"Successfully rendered template '{name}' with variables: {kwargs}."
+                # )
                 return result
             except KeyError as e:
                 logger.error(f"Missing variable for template '{name}': {e}")
@@ -159,9 +159,9 @@ class PromptTemplateManager:
                     }
                     for item in template
                 ]
-                logger.debug(
-                    f"Successfully rendered chat history template '{name}' with variables: {kwargs}."
-                )
+                # logger.debug(
+                #     f"Successfully rendered chat history template '{name}' with variables: {kwargs}."
+                # )
                 return rendered_list
             except KeyError as e:
                 logger.error(f"Missing variable in chat history template '{name}': {e}")
@@ -179,7 +179,7 @@ class PromptTemplateManager:
         Returns:
             List[str]: A list of template names.
         """
-        logger.info("Listing all available template names.")
+        # logger.info("Listing all available template names.")
 
         return list(self.templates.keys())
 
@@ -199,7 +199,7 @@ class PromptTemplateManager:
         if name not in self.templates:
             logger.error(f"Template '{name}' not found.")
             raise KeyError(f"Template '{name}' not found.")
-        logger.debug(f"Retrieved template '{name}'.")
+        # logger.debug(f"Retrieved template '{name}'.")
 
         return self.templates[name]
 
@@ -221,7 +221,7 @@ class PromptTemplateManager:
             elif isinstance(template, list):
                 for item in template:
                     print(f"Role: {item['role']}, Content: {item['content']}")
-            logger.info(f"Printed template '{name}'.")
+            # logger.info(f"Printed template '{name}'.")
         except KeyError as e:
             logger.error(f"Failed to print template '{name}': {e}")
             raise

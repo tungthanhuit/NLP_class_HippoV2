@@ -3,7 +3,7 @@ from typing import List
 import json
 from datetime import datetime
 
-from src.hipporag.HippoRAG import HippoRAG
+from src.hipporag.factory import HippoRAGGate
 from src.hipporag.utils.misc_utils import string_to_bool
 from src.hipporag.utils.config_utils import BaseConfig
 
@@ -90,6 +90,64 @@ def get_gold_answers(samples):
         gold_answers.append(gold_ans)
 
     return gold_answers
+
+
+def _print_eval_summary(result, logger, n_queries: int) -> None:
+    if len(result) < 5:
+        logger.info("No evaluation results (gold_answers not provided).")
+        return
+
+    _, _, _, overall_retrieval_result, overall_qa_results, retrieval_metrics, qa_step_metrics = result
+
+    sep = "=" * 64
+    logger.info(sep)
+    logger.info("  EVALUATION SUMMARY")
+    logger.info(sep)
+
+    # --- QA quality ---
+    logger.info("  [QA]")
+    if overall_qa_results:
+        for k, v in overall_qa_results.items():
+            logger.info(f"    {k:<30} {v:.4f}")
+    if qa_step_metrics:
+        logger.info(f"    {'context_coverage_pct':<30} {qa_step_metrics.get('context_coverage_pct', 'n/a')}")
+        logger.info(f"    {'reasoning_failure_rate_pct':<30} {qa_step_metrics.get('reasoning_failure_rate_pct', 'n/a')}")
+        logger.info(f"    {'avg_context_tokens':<30} {qa_step_metrics.get('avg_context_tokens', 'n/a')}")
+
+    # --- Retrieval @K=5 ---
+    logger.info("  [Retrieval @K=5]")
+    if retrieval_metrics:
+        for key in ("K", "R@K", "AR@K", "FirstHop@K", "LastHop@K"):
+            if key in retrieval_metrics:
+                logger.info(f"    {key:<30} {retrieval_metrics[key]}")
+
+    # --- Retrieval @full pool ---
+    full_k = (retrieval_metrics or {}).get("full_k", {})
+    if full_k:
+        label = f"Retrieval @K={full_k.get('K', '?')}"
+        logger.info(f"  [{label}]")
+        for key in ("R@K", "AR@K", "FirstHop@K", "LastHop@K"):
+            if key in full_k:
+                logger.info(f"    {key:<30} {full_k[key]}")
+
+    # --- Recall@k from RetrievalRecall (sparse set of k values) ---
+    if overall_retrieval_result:
+        logger.info("  [Recall@k (RetrievalRecall evaluator)]")
+        for k in (1, 2, 5, 10, 20, 50, 100):
+            key = f"Recall@{k}"
+            if key in overall_retrieval_result:
+                logger.info(f"    {key:<30} {overall_retrieval_result[key]:.4f}")
+
+    # --- IRCoT loop coverage (Enhanced only) ---
+    ircot_ctx = (retrieval_metrics or {}).get("ircot_context", {})
+    if ircot_ctx:
+        logger.info("  [IRCoT loop coverage (AR@Loop)]")
+        for key in ("N", "R@N", "AR@N", "FirstHop@N", "LastHop@N"):
+            if key in ircot_ctx:
+                logger.info(f"    {key:<30} {ircot_ctx[key]}")
+
+    logger.info(f"  Queries evaluated: {n_queries}")
+    logger.info(sep)
 
 
 def main():
@@ -255,13 +313,14 @@ def main():
 
     logging.getLogger("__main__").info(f"Logging to {log_path}")
 
-    hipporag = HippoRAG(global_config=config)
+    hipporag = HippoRAGGate(global_config=config)
 
     if args.mode in ("all", "index"):
         hipporag.index(docs)
 
     if args.mode in ("all", "qa"):
-        hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers)
+        result = hipporag.rag_qa(queries=all_queries, gold_docs=gold_docs, gold_answers=gold_answers)
+        _print_eval_summary(result, logging.getLogger("__main__"), n_queries=len(all_queries))
 
 
 if __name__ == "__main__":

@@ -316,3 +316,41 @@ python main.py --dataset musique --mode qa --use_enhancements
 ```bash
 python main.py --dataset musique --log_level DEBUG
 ```
+
+## Debugging commands
+
+```bash
+# Command for standard HippoRAG
+uv run main.py --dataset 2wikimultihopqa --llm_name gemini-3.1-flash-lite-preview --mode all --query_file reproduce/dataset/2wikimultihopqa_first50.json --log_level DEBUG
+
+# Command for enhanced HippoRAG
+uv run main.py --dataset 2wikimultihopqa --llm_name gemini-3.1-flash-lite-preview --mode all --query_file reproduce/dataset/2wikimultihopqa_first50.json --log_level DEBUG --use_enhancements
+
+# Command for specific sample debugging via index
+uv run main.py --dataset 2wikimultihopqa --llm_name gemini-3.1-flash-lite-preview --mode qa --query_file reproduce/dataset/2wikimultihopqa_first50.json --log_level DEBUG --use_enhancements --sample_idx 0
+```
+
+## Experiment commands
+
+```bash
+# Command for standard HippoRAG
+## 2wikimultihopqa
+uv run main.py --dataset 2wikimultihopqa --llm_name gemini-3.1-flash-lite-preview --mode all
+
+## musique
+uv run main.py --dataset musique --llm_name gemini-3.1-flash-lite-preview --mode all
+
+# Command for enhanced HippoRAG
+## 2wikimultihopqa
+uv run main.py --dataset 2wikimultihopqa --llm_name gemini-3.1-flash-lite-preview --mode all --use_enhancements
+
+## musique
+uv run main.py --dataset musique --llm_name gemini-3.1-flash-lite-preview --mode all --use_enhancements
+```
+
+## Ablation command
+
+```bash
+# Command for musique
+uv run main_ablation.py --dataset musique --configs F --llm_name gemini-3.1-flash-lite-preview
+```

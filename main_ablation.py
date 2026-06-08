@@ -24,7 +24,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from src.hipporag.HippoRAG import HippoRAG
+from src.hipporag.EnhancedHippoRAG import EnhancedHippoRAG
 from src.hipporag.StandardRAG import StandardRAG
 from src.hipporag.utils.misc_utils import string_to_bool
 from src.hipporag.utils.config_utils import BaseConfig
@@ -117,6 +117,14 @@ ABLATION_CONFIGS = [
         "short": "hipporag_e1e2",
         "use_dpr": False,
         "use_enhancements": True,
+        "max_qa_steps": 4,
+    },
+    {
+        # DPR for both initial retrieval and every IRCoT hop — no graph
+        "name": "F: DPR + IRCoT",
+        "short": "dpr_ircot",
+        "use_dpr": True,
+        "use_enhancements": False,
         "max_qa_steps": 4,
     },
 ]
@@ -238,13 +246,13 @@ def print_comparison_table(results: List[Dict]) -> None:
         ("  E1 multi-query rate", "multi_query_rate"),
         ("  E2 coverage inj rate", "coverage_audit_rate"),
     ]:
-        vals = [_pct(100*r.get("pipeline_snapshot",{}).get("enhancements",{}).get(key,0)) for r in results]
+        vals = [_pct(100*((r.get("pipeline_snapshot") or {}).get("enhancements") or {}).get(key) or 0) for r in results]
         lines.append(row(label, vals))
     for label, key in [
         ("  DPR fallback rate", "fallback_rate"),
         ("  Reranker keep rate", "reranker_keep_rate"),
     ]:
-        vals = [_pct(100*r.get("pipeline_snapshot",{}).get("retrieval",{}).get(key,0)) for r in results]
+        vals = [_pct(100*((r.get("pipeline_snapshot") or {}).get("retrieval") or {}).get(key) or 0) for r in results]
         lines.append(row(label, vals))
 
     lines.append(section("Timing (seconds)"))
@@ -253,7 +261,7 @@ def print_comparison_table(results: List[Dict]) -> None:
         ("  PPR", "ppr_sec"),
         ("  Rerank", "rerank_sec"),
     ]:
-        vals = [str(r.get("pipeline_snapshot",{}).get("timing",{}).get(key, "n/a")) for r in results]
+        vals = [str(((r.get("pipeline_snapshot") or {}).get("timing") or {}).get(key, "n/a")) for r in results]
         lines.append(row(label, vals))
 
     lines.append("=" * (label_w + col_w * len(configs)))
@@ -266,9 +274,14 @@ def main():
     parser.add_argument("--llm_base_url", type=str, default="http://localhost:4000/v1")
     parser.add_argument("--llm_name", type=str, default="gpt-4o-mini")
     parser.add_argument("--embedding_name", type=str, default="text-embedding-3-small")
-    parser.add_argument("--save_dir", type=str, default="outputs/ablation")
+    parser.add_argument("--save_dir", type=str, default="outputs/ablation",
+                        help="Directory for ablation result JSONs and logs.")
+    parser.add_argument("--index_dir", type=str, default=None,
+                        help="Parent directory of the pre-built index (e.g. 'outputs'). "
+                             "The dataset subfolder is appended automatically. "
+                             "Defaults to --save_dir/dataset if omitted.")
     parser.add_argument("--configs", type=str, default="A,B,C,D,E",
-                        help="Comma-separated subset of ablation configs to run (A,B,C,D,E)")
+                        help="Comma-separated subset of ablation configs to run (A,B,C,D,E,F)")
     parser.add_argument("--force_index_from_scratch", type=str, default="false")
     parser.add_argument("--max_qa_steps_override", type=int, default=None,
                         help="Override max_qa_steps for the full config (default: 4)")
@@ -277,7 +290,11 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     selected = {c.strip().upper() for c in args.configs.split(",")}
-    ablation_configs = [c for c in ABLATION_CONFIGS if c["short"][0].upper() in selected or c["name"][0].upper() in selected]
+    ablation_configs = [
+        c for c in ABLATION_CONFIGS
+        if c["name"][0].upper() in selected       # "F" from "F: DPR + IRCoT"
+        or c["short"].upper() in selected         # full short key e.g. "DPR_IRCOT"
+    ]
 
     dataset_name = args.dataset
     corpus_path = f"reproduce/dataset/{dataset_name}_corpus.json"
@@ -295,12 +312,20 @@ def main():
 
     force_scratch = string_to_bool(args.force_index_from_scratch)
 
+    # index_save_dir: where the graph/embeddings live (read from existing index)
+    # results go to args.save_dir/dataset_name/cfg["short"]/ablation_result.json
+    index_save_dir = (
+        os.path.join(args.index_dir, dataset_name)
+        if args.index_dir
+        else os.path.join(args.save_dir, dataset_name)
+    )
+
     all_results = []
 
     # Build a single HippoRAG instance and reuse for all graph-based runs
     # (index is shared; only config differences matter for retrieval/QA)
     base_config = BaseConfig(
-        save_dir=os.path.join(args.save_dir, dataset_name),
+        save_dir=index_save_dir,
         llm_base_url=args.llm_base_url,
         llm_name=args.llm_name,
         dataset=dataset_name,
@@ -317,7 +342,7 @@ def main():
         openie_mode="online",
     )
 
-    graph_rag = HippoRAG(global_config=base_config)
+    graph_rag = EnhancedHippoRAG(global_config=base_config)
     graph_rag.index(docs)
 
     for cfg in ablation_configs:
@@ -330,7 +355,13 @@ def main():
             max_steps = args.max_qa_steps_override
         graph_rag.global_config.max_qa_steps = max_steps
 
-        if cfg["use_dpr"]:
+        if cfg["use_dpr"] and max_steps > 1:
+            out = graph_rag.rag_qa_dpr_ircot(
+                queries=all_queries,
+                gold_docs=gold_docs,
+                gold_answers=list(gold_answers),
+            )
+        elif cfg["use_dpr"]:
             out = graph_rag.rag_qa_dpr(
                 queries=all_queries,
                 gold_docs=gold_docs,

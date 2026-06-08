@@ -126,6 +126,20 @@ def flatten_facts(chunk_triples: List[Triple]) -> List[Triple]:
     return graph_triples
 
 
+def verbalize_fact(fact: Triple) -> str:
+    """
+    Convert a structured triple into a natural-language retrieval surface.
+
+    The graph stores the original (subject, predicate, object) tuple; this
+    function produces the text that gets embedded. Simple concatenation avoids
+    the brittleness of keyword-prefix heuristics on noisy OpenIE predicates.
+    """
+    if len(fact) != 3:
+        return str(fact)
+    subject, predicate, obj = [str(part).strip() for part in fact]
+    return f"{subject} {predicate} {obj}."
+
+
 def min_max_normalize(x):
     min_val = np.min(x)
     max_val = np.max(x)
